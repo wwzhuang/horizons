@@ -1,0 +1,2261 @@
+---
+title: "HorizonsManuscript_Analyses"
+author: "Winnie Zhuang"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# About
+This R markdown file contains the code used to produce the analyses in the manuscript, "Changes in adaptation to time horizons across development".
+
+# Set Up
+Section to load in packages and data files.
+
+## Packages
+```{r setup packages}
+# install.packages(c("ggplot2",
+#                    "tidyverse",
+#                    "lmerTest",
+#                    "lme4",
+#                    "emmeans",
+#                    "flextable"
+#                    )
+#                  )
+library(ggplot2)
+library(tidyverse)
+library(lmerTest)
+library(lme4)
+library(emmeans)
+library(flextable)
+library(PerformanceAnalytics)
+library(apaTables)
+library(ggpubr)
+```
+
+## Global options
+```{r setup global options}
+options(digits=4)
+
+```
+
+## Horizons Data Processing
+### Merged > Processed
+```{r}
+#Read in data
+#grab raw data
+dt_raw<- read.csv("SearchCosts_TimeSearch_MergedData_20200427.csv",header=T)
+#grab experimenter notes
+dt_redcap0<-read.csv("SearchCosts-All_REDcapSummary_20220505WZ.csv",header=T)
+
+#fix any errors
+names(dt_raw)[names(dt_raw)=="participant"]<-"id"#rename participant to id
+# rename the misnamed subject, DOT 11/21/2019 should be SearchCosts-05_S026
+dt_raw$id[grep("2019_Oct_21",dt_raw$date)] <- "SearchCosts-5_S026"
+
+#something up with SearchCosts-5_S015, trialnum 14
+#dt_raw %>% filter(info_gain=="[]") #no data recorded?
+#but freechoice_resp.clicked_name=="['free_choice_targetb']", so they should have data
+#check
+# dt_raw %>% filter(freechoice_resp.clicked_name=="['free_choice_targetb']" & 
+#                     trialnum==14) %>% #which one is freechoice_resp.clicked_name=="['free_choice_targetb']"?
+#  distinct(reward_gain, #these variables should all have some value 
+#           info_gain,
+#           info_gain_list,
+#           reward_gain_list,
+#           info_gain1,
+#           reward_gain1)
+
+#fix SearchCosts-5_S015, trialnum 14
+dt_raw$reward_gain[dt_raw$reward_gain=="[]"]<-"[1.50975]" #reward gain= 1.50975
+dt_raw$info_gain[dt_raw$info_gain=="[]"]<-"[1]"
+dt_raw$info_gain_list[dt_raw$info_gain_list=="[]"]<-"[1]"
+dt_raw$reward_gain_list[dt_raw$reward_gain_list=="[]"] <- "[1.50975]"
+dt_raw$info_gain1[is.na(dt_raw$info_gain1)]<-1
+dt_raw$reward_gain1[is.na(dt_raw$reward_gain1)]<-1.50975
+
+#check all values for SearchCosts-5_S015
+# dt_raw %>% filter(id=="SearchCosts-5_S015")#perfect!
+
+#also fix the string id; remove extra space
+dt_raw$id[dt_raw$id=="SearchCosts-5_S037 "]<-"SearchCosts-5_S037"
+#dt_raw$id[dt_raw$id=="SearchCosts-5_S037"] #check; great!
+
+#make new variables
+#dummy codes for age
+dt_raw$agegroup11<-ifelse(dt_raw$agegroup=="11",1,0)
+dt_raw$agegroupa<-ifelse(dt_raw$agegroup=="Adult",1,0)
+dt_raw$agegroup5<-ifelse(dt_raw$agegroup=="5",1,0)
+#check; do totals match?
+# dt_raw %>% group_by(agegroup) %>%
+#   summarise(count=n(),
+#             agegroupa=sum(agegroupa),
+#             agegroup11=sum(agegroup11),
+#             agegroup5=sum(agegroup5)) #good!
+
+#choice num when explore pick occurred
+dt_raw$info_gainX<-NA
+dt_raw$info_gainX[dt_raw$info_gain1==1]<-1
+dt_raw$info_gainX[dt_raw$info_gain2==1]<-2
+dt_raw$info_gainX[dt_raw$info_gain3==1]<-3
+dt_raw$info_gainX[dt_raw$info_gain4==1]<-4
+
+#check; does info_gainX match info_gain_list?
+# dt_raw %>% filter(horizons==4) %>%
+#   dplyr::select(info_gain_list,
+#                          info_gainX) %>%
+#   distinct() #good!
+
+#variables to code horizons
+dt_raw$horizons_all<-0
+dt_raw$horizons_all[dt_raw$horizons_known==1&dt_raw$horizons==1]<-1
+dt_raw$horizons_all[dt_raw$horizons_known==1&dt_raw$horizons==4]<-4
+dt_raw$h_long<-ifelse(dt_raw$horizons_all==4,1,0)
+dt_raw$h_short<-ifelse(dt_raw$horizons_all==1,1,0)
+dt_raw$h_amb<-ifelse(dt_raw$horizons_all==0,1,0)
+
+#check that all horizons codes match
+# dt_raw %>% group_by(horizons_all) %>% 
+#   summarize(h_long=sum(h_long),
+#             h_short=sum(h_short),
+#             h_amb=sum(h_amb),
+#             count=n()) #great!
+
+dt_raw$reward_state<-gsub("\\[|\\]","",dt_raw$reward_state)
+dt_raw$start_info_state=gsub("\\[|\\]","",dt_raw$start_info_state)
+
+#get position of rewards and associated states
+dt_raw<-dt_raw %>%
+  separate(col=reward_state,into=c("reward_posA",
+                                   "reward_posB",
+                                   "reward_posC",
+                                   "reward_posD"),sep=",") %>%
+  separate(col=start_info_state,into=c("state_posA",
+                                   "state_posB",
+                                   "state_posC",
+                                   "state_posD"),sep=",") %>%
+  rowwise() %>% 
+  mutate(
+    maxIndex = which.max(c_across(reward_posA:reward_posD)),
+    maxState = as.numeric(c_across(state_posA:state_posD)[[maxIndex]]),
+    max_choice= ifelse(maxState==1,"explore","exploit"),
+    reward_exploit = ifelse(max_choice=="exploit",largest,large),
+    exploreIndex = which.max(c_across(state_posA:state_posD)),
+    reward_explore = as.numeric(c_across(reward_posA:reward_posD)[[exploreIndex]])
+  ) %>% 
+  ungroup() 
+
+#get largest option picked by participant for each trial
+dt_raw<-dt_raw %>% rowwise() %>%
+  mutate(reward_gain_max=max(
+    c_across(reward_gain1:reward_gain4),
+    na.rm=T),
+    uniqueRewards=n_distinct(c_across(reward_gain1:reward_gain4),
+                                  na.rm=T)) %>%
+  ungroup() %>%
+  group_by(id) %>%
+  mutate(reward_max_sum=cumsum(reward_gain_max),
+        reward_max_avg=reward_max_sum/trialnum) 
+  
+# #get largest reward seen by participant
+dt_raw<-dt_raw %>% rowwise() %>%
+  group_by(id) %>%
+  mutate(largestSeen=ifelse(!is.na(info_gainX), #exploration happened
+                               largest, #largest reward would be revealed
+                               reward_exploit #else, the exploit reward is the largest visible
+                               ),
+         largestSeen_sum=cumsum(largestSeen),
+         largestSeen_avg=cumsum(largestSeen)/trialnum,
+         exploitMaxAvgDiff=reward_exploit-largestSeen_avg,
+         prevExploreReward=lag(reward_explore) #make size of prev explore option
+         ) 
+#check
+# dt_raw %>%
+#   # dplyr::select(id,trialnum,info_gainX,
+#   #               reward_exploit,reward_explore,
+#   #               largestSeen,largestSeen_avg,
+#   #               exploitMaxAvgDiff) %>%
+#   ggplot(aes(x=exploitMaxAvgDiff,
+#              y=info_gain1,
+#              group=agegroup,
+#              color=agegroup))+
+#   geom_point() +
+#   geom_smooth()
+
+#check prev Explore Reward
+#dt_raw %>% dplyr::select(id,trialnum,reward_explore,prevExploreReward) #great!
+
+#arrange agegroup into factor
+dt_raw<- dt_raw %>% mutate(agegroup =  factor(agegroup, 
+                                   levels = c("5",
+                                              "11",
+                                              "Adult")))
+#search pattern string variable
+dt_raw$choice1 <- ifelse(dt_raw$info_gain1==1,
+                         "explore",
+                         ifelse(dt_raw$reward_gain1==dt_raw$reward_exploit,
+                                "exploit","other"))
+dt_raw$choice2 <- ifelse(dt_raw$info_gain2==1,
+                         "explore",
+                         ifelse(dt_raw$reward_gain2==dt_raw$reward_exploit, 
+                                "exploit","other"))
+dt_raw$choice3 <- ifelse(dt_raw$info_gain3==1,
+                         "explore",
+                         ifelse(dt_raw$reward_gain3==dt_raw$reward_exploit,
+                                "exploit","other"))
+dt_raw$choice4 <- ifelse(dt_raw$info_gain4==1,
+                         "explore",
+                         ifelse(dt_raw$reward_gain4==dt_raw$reward_exploit,
+                                "exploit","other"))
+dt_raw$searchPattern <- paste(dt_raw$choice1,
+                          dt_raw$choice2,
+                          dt_raw$choice3,
+                          dt_raw$choice4,
+                          sep=", ")
+#View(dt_raw) #check
+dt<-dt_raw
+```
+
+### Processed > Choice
+```{r}
+dtc <- dt %>%
+  pivot_longer(cols=c(info_gain1,info_gain2,info_gain3,info_gain4), #get info_gain for each choice
+               names_to="choice_num",
+               names_prefix="info_gain",
+               values_to="explore") %>%
+  filter(!is.na(explore)) #remove unneeded choice_nums in horizons==4
+
+#check
+# dtc %>% group_by(horizons_all) %>%
+#   summarise(count=n(),
+#             explore=sum(explore))
+
+#make reward gain for trial
+dtc$reward_gain<-ifelse(dtc$choice_num==1,dtc$reward_gain1, #get reward gain for each choice
+                        ifelse(dtc$choice_num==2,dtc$reward_gain2,
+                               ifelse(dtc$choice_num==3,dtc$reward_gain3,
+                                      ifelse(dtc$choice_num==4,dtc$reward_gain4,NA))))
+dtc$prop_max_reward=dtc$reward_gain1/dtc$largest
+dtc$max_reward_selected<-ifelse(dtc$prop_max_reward==1,1,0)
+
+#make largest revealed
+dtc$largestVisible<-ifelse(dtc$choice_num==1 | #on first choice the exploit reward is always the largest
+                          dtc$info_gainX>=dtc$choice_num | #if explore happened in a later trial
+                          is.na(dtc$info_gainX),#explore didn't occur
+                          dtc$reward_exploit,
+                          ifelse(dtc$info_gainX<dtc$choice_num, #explore option was picked before current trial
+                                dtc$largest, #all options are revealed, and largest reward is visible
+                                NA)
+                          ) #there should be no NAs..
+
+#check; should have no NAs
+# dtc %>% filter(trialnum==12) %>%
+#   dplyr::select(trialnum,choice_num,info_gainX,explore,
+#                       reward_exploit,reward_explore,
+#                       reward_gain,largestVisible) 
+
+#mark choice types
+dtc$exploit<- ifelse(dtc$explore==0 & 
+                       dtc$reward_gain==dtc$largestVisible, 1, 0) #mark exploit choices
+dtc$other<-ifelse(dtc$explore==0 & 
+                    dtc$exploit==0 & 
+                    dtc$reward_gain<dtc$largestVisible,1,0)
+#check every trial has only 1 choice dummy coded
+# dtc %>% rowwise() %>%
+#   mutate(choiceTypeTotal=exploit + explore + other) %>%
+#   dplyr::select(trialnum,choice_num,
+#                 reward_exploit,reward_explore,
+#                 reward_gain,explore,other,exploit,
+#                 choiceTypeTotal) %>%
+#   filter(choiceTypeTotal>1) #none, great!
+
+#make choice type string
+dtc$choiceType<-ifelse(dtc$explore==1,"explore",
+                       ifelse(dtc$exploit==1,"exploit","other"))
+#check that choiceType equals dummy codes
+# dtc %>% group_by(choiceType) %>%
+#   summarise(count=n(),
+#             explore=sum(explore),
+#             exploit=sum(exploit),
+#             other=sum(other)) #great!
+```
+
+#### Label Choice patterns
+categories 9/1/2022
+```{r}
+#make a legend of search patterns
+dt_choicePatterns<-data.frame(varname=c(
+                                        "choice1_exploitOnly",#keep, choice6_exploitOnly
+                                        "choice2_exploreFirstThenExploit",#keep, choice2_exploreFirstThenExploit
+                                        "choice3_exploreFirstMixed",# keep, choice3_exploreFirstMixed
+                                        "choice4_exploreFirstSampleRest", #keep, choice4_exploreFirstSampleRest
+                                        "choice5_sampleAll", #keep, choice5_sampleAll
+                                        "choice6_misc" #keep, choice6_misc
+                                        ),
+                              description=c(
+                                "1 Exploit-only-never-explore",
+                                "2 Explore-first-then-exploit",
+                                "3 Explore-first-then-mixed",
+                                "4 Explore-first-then-sample-all-remaining",
+                                "5 Sample-all-w/o-exploring-first",
+                                "6 Any other patterns")
+                              )
+
+#1 exploit --> exploit --> exploit --> exploit
+dtc$choice1_exploitOnly<-ifelse(dtc$h_long==1 & 
+                                 dtc$reward_gain1==dtc$reward_exploit #define exploit pattern
+                              & dtc$reward_gain2==dtc$reward_exploit
+                              & dtc$reward_gain3==dtc$reward_exploit
+                              & dtc$reward_gain4==dtc$reward_exploit,
+                              1,0)
+
+#2 Explore first then exploit= explore → largest → largest → largest
+dtc$choice2_exploreFirstThenExploit<-ifelse(dtc$h_long==1
+                           & dtc$reward_gain1==dtc$reward_explore  #define optimal pattern
+                          & dtc$reward_gain2==dtc$largest
+                          & dtc$reward_gain3==dtc$largest
+                          & dtc$reward_gain4==dtc$largest,
+                          1,0)
+
+#3 Explore-first-then-mixed
+dtc$choice3_exploreFirstMixed<-ifelse(dtc$h_long==1 &
+                                        dtc$reward_gain1==dtc$reward_explore &
+                                        dtc$uniqueRewards<4 &
+                                        dtc$choice2_exploreFirstThenExploit!=1,
+                                      1,0
+                                      )
+
+
+#4 start with explore option, then pick each remaining 3
+dtc$choice4_exploreFirstSampleRest<-ifelse(dtc$h_long==1 &
+                                 dtc$reward_gain1==dtc$reward_explore &
+                                  dtc$uniqueRewards==4, #check that all reward_gains are unique
+                              1,0)
+
+#5 sample-all-w/o-exploring-first
+dtc$choice5_sampleAll <- ifelse(dtc$h_long==1 &
+                               dtc$choice4_exploreFirstSampleRest!=1 &
+                               dtc$uniqueRewards==4,
+                             1,0)
+
+#5 others
+dtc$choice6_misc<-ifelse(dtc$h_long==1 &
+                        dtc$choice1_exploitOnly==0 &
+                        dtc$choice2_exploreFirstThenExploit==0 &
+                        dtc$choice3_exploreFirstMixed==0 &
+                        dtc$choice4_exploreFirstSampleRest==0 &
+                        dtc$choice5_sampleAll==0,
+                  1,0)
+
+# #write data
+# output_file="SearchCosts_Horizons_ChoiceLevel_220915WZ.csv"
+# write.csv(dtc,output_file,row.names=FALSE)
+```
+
+Check search patterns
+```{r}
+#variables
+# "choice1_exploitOnly",#keep, choice6_exploitOnly
+# "choice2_exploreFirstThenExploit",#keep, choice2_exploreFirstThenExploit
+# "choice3_exploreFirstMixed",# keep, choice3_exploreFirstMixed
+# "choice4_exploreFirstSampleRest", #keep, choice4_exploreFirstSampleRest
+# "choice5_sampleAll", #keep, choice5_sampleAll
+# "choice6_misc" #keep, choice6_misc
+
+# check raw data
+dtc %>% filter(h_long==1 ) %>%
+  group_by(id,trialnum) %>%
+  dplyr::select(trialnum,choice_num,
+                info_gain_list,
+                reward_gain_list,
+                reward_explore,reward_exploit,
+                reward_gain,uniqueRewards,
+                choiceType,
+                starts_with("search")) #%>% 
+  #View()
+
+#any that overlap?
+dtc %>% filter(h_long==1) %>% 
+  rowwise() %>%
+  mutate(searchSum=sum(c_across(choice1_exploitOnly:choice6_misc))) %>%
+  filter(searchSum>1) %>%
+  dplyr::select(trialnum,choice_num,
+                info_gain_list,
+                reward_gain_list,
+                reward_explore,reward_exploit,
+                reward_gain,uniqueRewards,
+                choiceType,
+                starts_with("search"))#none, awesome!
+
+# check summarised data in table
+dtc %>% filter(h_long==1) %>%
+  summarise(across(choice1_exploitOnly:choice6_misc,
+                   ~ sum(.x,na.rm=T)),
+            total=n()) #recall these are choices, not trials
+
+#see search patterns in misc
+dtc %>% filter(h_long==1 &
+                 choice6_misc==1) %>%
+  group_by(searchPattern) %>%
+  summarise(count=n())
+
+# check w/ graph
+dtc %>% 
+  filter(h_long==1 
+         & choice6_misc==1) %>%
+  ggplot(aes(x=choice_num,
+         y=scale(reward_gain),
+         group=interaction(id,trialnum),
+         color=as.factor(explore))) +
+  geom_line(color="gray")+
+  geom_point()+
+  #geom_jitter(height=0,width=0.1) +
+  labs(title="choice6_misc",
+       x="choice number",
+       y="reward gained (standardized)") +
+  scale_color_discrete(name="Explore") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(size = 5))
+```
+
+
+### Processed > Summary
+```{r}
+dtc1 <- subset(dtc, choice_num==1 & !is.na(choiceType))#grab first choices only
+
+dtsum.horizons<-dtc1 %>% group_by(id,agegroup,horizons_all) %>% 
+  summarise(explore_mean=mean(explore,na.rm=T),
+            exploit_mean=mean(exploit,na.rm=T),
+            other_mean=mean(other,na.rm=T)) %>%
+  pivot_wider(id_cols=id,
+              names_from=horizons_all,
+              names_prefix="h",
+              values_from=c(explore_mean:other_mean)
+              )
+#check
+#colnames(dtsum.horizons)
+
+#dtsum overall
+dtsum.all<-dtc1 %>% group_by(id,agegroup) %>%
+  summarise(trialcount=n(),
+            reward_total=max(reward_total,na.rm=T),
+            explore_mean=mean(explore,na.rm=T),
+            exploit_mean=mean(exploit,na.rm=T),
+            other_mean=mean(other,na.rm=T))
+
+#check
+#View(dtsum.all)
+
+#combine 
+dtsum0<-merge(dtsum.horizons,dtsum.all,by="id")
+
+#work w/ experimenter notes and subject info
+dt_redcap1<-subset(dt_redcap0,
+                   select=c(record_id,
+                            subjid,
+                            dob,
+                            age,
+                            sex,
+                            dot,
+                            tst_status,
+                            posttestq_tst1,
+                            posttestq_tst2,
+                            exprnotes_tst,
+                            exprnotes_general))
+dt_redcap1$id<-dt_redcap1$record_id #make the same id column name
+
+#merge experimenter notes with dtsum
+dtsum1<-merge(dt_redcap1,dtsum0,
+              by="id",
+              all.x=T)
+
+dtsum <- dtsum1
+
+#fix missing age groups
+dtsum$agegroup[dtsum$id=="SearchCosts-5_S032"]<-5
+dtsum$agegroup[dtsum$id=="SearchCosts-5_S009"]<-5
+dtsum$agegroup[dtsum$id=="SearchCosts-Adult_S017"]<-"Adult"
+
+#new variables
+dtsum$agegroup5<-ifelse(dtsum$agegroup==5,1,0)
+dtsum$agegroup11<-ifelse(dtsum$agegroup==11,1,0)
+dtsum$agegroupa<-ifelse(dtsum$agegroup=="Adult",1,0)
+dtsum$pref_novelty<-ifelse(dtsum$posttestq_tst1==2,0,dtsum$posttestq_tst1)
+dtsum$adaptation <- dtsum$explore_mean_h4 - dtsum$explore_mean_h1
+dtsum$male<-ifelse(dtsum$sex==1,1,
+                ifelse(dtsum$sex==2,0,NA))
+
+#age related variables
+dtsum$dotc<-as.Date(dtsum$dot,format="%m/%d/%y") #make date
+dtsum$dobc<-as.Date(dtsum$dob,format="%m/%d/%y")
+dtsum$age<-as.numeric(as.character(dtsum$age))
+dtsum$age<-ifelse(dtsum$agegroup!="Adult",
+               as.numeric(difftime(dtsum$dotc,dtsum$dobc,units="weeks")/52.25),
+               dtsum$age)#age
+
+#fix completion variable for SearchCosts-Adult_S017, who's missing data
+dtsum$tst_status[dtsum$id=="SearchCosts-Adult_S017"]<-0
+dtsum$completed<-ifelse(dtsum$tst_status==1,1,0)
+
+#export data file
+# output_file="SearchCosts_Horizons_Summary_220915WZ.csv"
+# write.csv(dtsum,output_file,row.names=FALSE)
+```
+
+
+## Start from processed data
+```{r}
+dtc<-read.csv("SearchCosts_Horizons_ChoiceLevel_220915WZ.csv")
+dtsum<-read.csv("SearchCosts_Horizons_Summary_220915WZ.csv")
+#relevel agegroup 
+dtc<- dtc %>% mutate(agegroup =  factor(agegroup, 
+                                   levels = c("5",
+                                              "11",
+                                              "Adult")))
+dtsum<-dtsum %>% mutate(agegroup =  factor(agegroup, 
+                                   levels = c("5",
+                                              "11",
+                                              "Adult")))
+
+dtc1 <- subset(dtc, choice_num==1 & !is.na(choiceType))#grab first choices only
+
+#axcpt
+dt_axcpt0<-read.csv("SearchCosts_AXCPT_Summary_220310.csv",header=T)
+dt_axcpt1<-subset(dt_axcpt0,select=c(id,PBI_error,PBI_zrt,PBI_logRT,dcon))
+dt_axcpt<-dt_axcpt1
+
+#get IUS
+dt_ius0<-read.csv("SearchCosts-All_IUSSummary_220907WZ.csv")
+dt_ius0$id<-dt_ius0$subjid
+dt_ius1<-subset(dt_ius0,select=c(id,ius_total))
+
+dt_ius<-dt_ius1
+
+#merge
+dt_merge0<-merge(dtsum,dt_axcpt,
+                by="id",all.x=T) 
+dt_merge1<-merge(dt_merge0,dt_ius,
+                 by="id",all.x=T)
+dt_merge <- dt_merge1
+
+#make combined IUS scores
+
+#colnames(dt_merge) #check
+# nrow(dt_merge)
+```
+
+# Descriptives
+
+## Participants
+```{r}
+dtsum %>% group_by(agegroup) %>% 
+  summarise(count=n(),
+            completed=sum(completed,na.rm=T),
+            age_mean=mean(as.numeric(age),na.rm=TRUE),
+            age_sd=sd(age,na.rm=TRUE),
+            explore_m=mean(explore_mean,na.rm=T)*100,
+            explore_sd=sd(explore_mean,na.rm=T)*100,
+            exploit_m=mean(exploit_mean,na.rm=T)*100,
+            exploit_sd=sd(exploit_mean,na.rm=T)*100,
+            other_m=mean(other_mean,na.rm=T)*100,
+            other_sd=sd(other_mean,na.rm=T)*100,
+            reward_mean=mean(reward_total,na.rm=T),
+            reward_sd=sd(reward_total,na.rm=T),
+            adpt_mean=mean(adaptation,na.rm=T),
+            adpt_sd=sd(adaptation,na.rm=T)) %>%
+  # pivot_longer(cols=count:adpt_sd,
+  #              names_to = "variable",
+  #              values_to="value") %>%
+  flextable()
+```
+
+## Simplified Horizons Task
+### Task Design
+```{r}
+dtc1 %>% distinct(trialnum,.keep_all=T) %>%
+  # dplyr::select(trialnum, smallest:largest,
+  #               reward_posA:state_posD,
+  #               max_choice,
+  #               horizons_all) %>%
+  ggplot(aes(x=trialnum,y=largest,color=max_choice)) +
+  geom_point()+
+  geom_point(aes(x=trialnum,y=smallest),color="grey")+
+  geom_point(aes(y=med),color="grey")+
+  geom_point(aes(y=large),color="grey") +
+  geom_point(aes(y=reward_explore),color="#00BFC4")+ #green
+  geom_point(aes(y=reward_exploit),color="#F8766D") + #red
+  scale_color_discrete(name="choice")+
+  scale_x_continuous(breaks=seq(1,18,1)) + 
+  facet_wrap(.~factor(horizons_all,
+                      levels=c("0","1","4"),
+                      labels=c("Ambiguous",
+                               "Short",
+                               "Long")),
+                      nrow=3) + #add horizons
+  labs(y="size of largest option (deg)",
+     x="trial number",
+     title="Simplified Horizons Task design")
+  
+```
+
+## Correlation table
+Full table of correlations among tasks
+```{r}
+dt_merge %>% 
+  mutate(percExplore=explore_mean*100,
+         percExploit=exploit_mean*100,
+         percOther=other_mean*100
+         #scaleReward=scale(reward_total)
+  ) %>%
+  filter(agegroup=="Adult") %>% #change to age group of interest
+  dplyr::select(#id,
+              age,
+              percExplore,
+              percExploit,
+              percOther,
+             reward_total,
+              adaptation
+              #pref_novelty,
+              # dcon,
+              # ius_total
+              ) %>% 
+  #chart.Correlation() 
+  #or(use="pairwise.complete.obs") %>% 
+  apa.cor.table(show.conf.interval = F) 
+
+```
+
+# Main Results
+## Initial choices in Simplified Horizons Task
+We first tested for age group differences in initial choices (Explore, Exploit, or Other) in all trials.
+
+### Age
+Plots:
+```{r}
+dtc1 %>% group_by(agegroup) %>% #get percentages by age group and choice type
+  summarise(explore=mean(explore,na.rm=TRUE),
+            exploit=mean(exploit,na.rm=TRUE),
+            other=mean(other,na.rm=TRUE)) %>%
+  pivot_longer(cols=explore:other,
+               names_to="firstchoice",
+               values_to="percentage") %>% #make long
+  ggplot(aes(x=factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger\nChildren", "Older\nChildren", "Adults")),
+             y=percentage,
+             group=agegroup,
+             fill=factor(firstchoice,
+                         levels=c("exploit",
+                                  "explore",
+                                  "other"),
+                         labels=c("Exploit",
+                                  "Explore",
+                                  "Other")))) +
+  geom_bar(position="stack",stat="identity") +
+  xlab("Age Group") + ylab("Proportion of Initial Choices") +
+  scale_fill_discrete(name="Initial Choice") +
+  theme(#legend.position="none",
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=20),
+        axis.title.x=element_text(size=20,colour="black"),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black")
+  )
+```
+
+See all individuals' choices
+```{r}
+fig2<-dtc1 %>% 
+  group_by(id,agegroup) %>% #get percentages by age group and choice type
+  summarise(explore=mean(explore,na.rm=TRUE)*100,
+            exploit=mean(exploit,na.rm=TRUE)*100,
+            other=mean(other,na.rm=TRUE)*100,
+            trial_sum=n()) %>%
+  filter(trial_sum>=10) %>% #to catch incompletes
+  ungroup() %>%
+  group_by(agegroup) %>%
+  arrange(desc(explore),exploit,other, .by_group = TRUE)  %>%
+  mutate(rownum=row_number()) %>%
+  pivot_longer(cols=explore:other,
+               names_to="firstchoice",
+               values_to="percentage") %>% 
+  ggplot(aes(x=rownum,
+             y=percentage,
+             group=factor(agegroup,
+                          levels=c("5","11","Adult")),
+             fill=factor(firstchoice,
+                         levels=c("exploit",
+                                  "explore",
+                                  "other"),
+                         labels=c("Exploit",
+                                  "Explore",
+                                  "Other")))) +
+  geom_bar(position="stack",stat="identity") +
+  scale_fill_discrete(name="Initial Choice") +
+  labs(x="participants","proportion") +
+  facet_wrap(.~factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger Children","Older Children","Adults")),
+             nrow=3)
+fig2
+
+#save
+# jpeg("Horizons_fig2.jpg",width=700)
+# fig2
+# dev.off()
+```
+We decided to remove other choices in the main analyses, because they're a non-target outcome, very few in number, and did not occur at all in 11yos. Analyses including Other choices can be viewed in the Supplemental section. 
+
+Stats: Do initial choices differ across age groups?
+```{r}
+#Let's look only at explore and exploit choices
+glmer_explore.age<-glmer(explore~agegroup + (1|id),
+                         data=subset(dtc1,other==0),
+                         family=binomial)
+#compare to base model
+glmer_explore<-glmer(explore~1 + (1|id),
+                         data=subset(dtc1,other==0),
+                         family=binomial)
+anova(glmer_explore.age,glmer_explore)
+```
+Explore initial choices differed significantly by age group. 
+
+Look at age effect on initial choices:
+```{r}
+summary(glmer_explore.age)
+```
+
+Pairwise comparisons among age groups:
+```{r}
+#group means
+emmeans(glmer_explore.age,
+        specs="agegroup") %>%
+  test()
+
+#age group contrasts
+emmeans(glmer_explore.age,
+        specs=pairwise~agegroup)$contrasts 
+
+confint(glmer_explore.age)
+```
+5yos explored significantly more than 11yos and Adults, both p's <=.002.
+
+Look specifically within 5yos, given high correlation between % explore and age in years within that age group:
+```{r}
+#plot age in years by explore% in 5yos
+tmp_plot<-ggplot(data=subset(dtsum,agegroup==5),
+       aes(x=age,
+           y=explore_mean)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  labs(title="5-6 year olds only",
+       x= "age in years",
+       y="proportion of initial explore choices") +
+  stat_cor(method = "pearson", label.x = 5.75, label.y = 1)
+
+tmp_plot
+
+#correlation
+cor.test(x=dtsum$age[dtsum$agegroup==5],
+         y=dtsum$explore_mean[dtsum$agegroup==5])
+
+#save jpeg
+# jpeg("Horizons_age5Xexplore.jpg")
+# tmp_plot
+# dev.off()
+
+```
+In younger children, age in years is significantly negatively correlated with initial explore %. Older kids have fewer trials where they explored first. 
+
+#### Trial 1 only
+Let's look only at the first trial, 
+
+```{r}
+#did selections differ by age group?
+dtc1 %>% filter(trialnum==1 & other!=1) %>%
+  ggplot(aes(x=factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger","Older","Adults")),
+             fill=choiceType)) +
+  geom_bar() +
+  labs(x="age group", title="count of trial1 choices")
+
+
+```
+
+Stats: 
+```{r}
+lm_exploreTrial1.age<-lm(explore~agegroup11 + agegroupa,
+                  data=subset(dtc1,trialnum==1))
+summary(lm_exploreTrial1.age)
+
+
+
+```
+Agegroup effect is also significant in trial 1.
+
+### Horizons
+Are initial choices different across horizons?
+
+Plot
+```{r}
+dtc1 %>% 
+  group_by(horizons_all) %>% #get percentages by age group and choice type
+  summarise(explore=mean(explore,na.rm=TRUE),
+            exploit=mean(exploit,na.rm=TRUE),
+            other=mean(other,na.rm=TRUE)) %>%
+  pivot_longer(cols=explore:other,
+               names_to="firstchoice",
+               values_to="proportion") %>% #make long
+  ggplot(aes(x=factor(horizons_all,
+                      levels=c(0,1,4),
+                      labels=c("Ambiguous", "Short", "Long")),
+             y=proportion,
+             #group=agegroup,
+             fill=factor(firstchoice,
+                         levels=c("exploit",
+                                  "explore",
+                                  "other"),
+                         labels=c("Exploit",
+                                  "Explore",
+                                  "Other")))) +
+  geom_bar(position="stack",stat="identity") +
+  xlab("Horizons") + ylab("Proportion of Initial Choices") +
+  scale_fill_discrete(name="Initial Choice") +
+  theme(#legend.position="none",
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=20),
+        axis.title.x=element_text(size=20,colour="black"),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black")
+  )
+
+dtc1 %>% group_by(id,agegroup,horizons_all) %>%
+  summarise(exploit_mean=mean(exploit,na.rm=T)) %>%
+  ggplot(aes(x=factor(horizons_all,
+                      levels=c(1,4,0),
+                      labels=c("Short","Long","Ambiguous")
+                      ),
+             y=exploit_mean
+             )
+         ) +
+  geom_violin() + geom_jitter() +
+  labs(x="Horizons",
+       y="proportion exploit first choices")
+  
+```
+
+Stats: Did initial choices differ among the 3 horizons?
+```{r}
+glmer_explore.horizons<-glmer(explore~as.factor(horizons_all) +
+                                (1|id),
+                              data=subset(dtc1,other==0),
+                              family=binomial)
+
+#compare w/o horizons
+anova(glmer_explore,glmer_explore.horizons)
+```
+Horizons significantly predicted explore initial choices, p<.001.
+
+Inspect horizons effect:
+```{r}
+summary(glmer_explore.horizons)
+
+emmeans(glmer_explore.horizons,
+        specs="horizons_all") %>%
+  pairs()
+```
+
+Explore choices differed significantly among all 3 horizons. Explore initial choices were lowest in short horizons, followed by ambiguous horizons, and highest in long horizons. 
+
+### Age X Horizons
+Plot
+```{r}
+dtc1 %>% 
+  group_by(horizons_all, agegroup) %>% #get percentages by age group and choice type
+  summarise(explore=mean(explore,na.rm=TRUE),
+            exploit=mean(exploit,na.rm=TRUE),
+            other=mean(other,na.rm=TRUE)) %>%
+  pivot_longer(cols=explore:other,
+               names_to="firstchoice",
+               values_to="proportion") %>% #make long
+  ggplot(aes(x=factor(horizons_all,
+                      levels=c(0,1,4),
+                      labels=c("Ambiguous", "Short", "Long")),
+             y=proportion,
+             #group=agegroup,
+             fill=factor(firstchoice,
+                         levels=c("exploit",
+                                  "explore",
+                                  "other"),
+                         labels=c("Exploit",
+                                  "Explore",
+                                  "Other")))) +
+  geom_bar(position="stack",stat="identity") +
+  xlab("Horizons") + ylab("Proportion of Initial Choices") +
+  scale_fill_discrete(name="Initial Choice") +
+  theme(#legend.position="none",
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=20),
+        axis.title.x=element_text(size=20,colour="black"),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black") 
+  )+
+  facet_wrap(.~agegroup, nrow=3)
+```
+
+
+Do choices differ among horizons and age group?
+```{r}
+#do percentage exploit differ by age group and horizons?
+m_expt.ageXh<-glmer(exploit~agegroup*
+                      as.factor(horizons_all)+(1|id),
+                    data=subset(dtc1,other==0),
+                    control=glmerControl( #help w/ convergence
+                      optimizer="bobyqa",
+                      optCtrl=list(maxfun=2e4)),
+                    family="binomial")
+#summary(m_expt.ageXh) 
+
+#model without interaction
+m_expt.age_h<-glmer(exploit~agegroupa + h_short + agegroup11 + h_long+(1|id),
+                    data=subset(dtc1,other==0),
+                    family="binomial")
+#summary(m_expt.age.h)
+
+#test interaction
+anova(m_expt.ageXh,m_expt.age_h) 
+```
+A significant ageXhorizons interaction on exploit choices. 
+
+Inspect interaction
+```{r}
+#look at contrasts within each age group
+emmeans(m_expt.ageXh,
+        pairwise~horizons_all|agegroup)
+
+
+#optional: change the reference group
+m_expt.ageXh<-glmer(exploit~agegroup11*h_long +
+                      agegroup11*h_amb +
+                      agegroupa*h_long +
+                      agegroupa*h_amb +
+                      (1|id),
+                    data=subset(dtc1,other==0),
+                    control=glmerControl( #help w/ convergence
+                      optimizer="bobyqa",
+                      optCtrl=list(maxfun=2e4)),
+                    family="binomial")
+summary(m_expt.ageXh) 
+
+
+```
+In 11yos and 
+
+## Exploit reward size effect
+Did exploit reward sizes affect initial choices?
+
+Plot
+```{r}
+fig3<-ggplot(data=dtc1,aes(x=scale(reward_exploit),
+                       fill=choiceType))+
+  geom_bar(position="stack",stat="count",width=0.1) +
+  labs(x="standardized reward size of exploit option in trial")
+
+fig3
+
+# #save
+# jpeg("Horizons_fig3.jpg")
+# fig3
+# dev.off()
+```
+Stats:
+```{r}
+glmer_explore.size<-glmer(explore~reward_exploit+(1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial")
+summary(glmer_explore.size)
+```
+Yes, exploit reward size affected explore choices. 
+
+### Age
+Did the exploit reward size effect differ by age group?
+
+Plot
+```{r}
+ggplot(data=subset(dtc1,other==0),aes(x=reward_exploit,
+                       fill=choiceType))+
+  geom_bar(position="stack",stat="count",width=0.1) +
+  labs(x="reward size of exploit option in trial") +
+  # xlab("horizons")+
+  # scale_fill_discrete(name="Choice Type")+
+  facet_wrap(~factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger Children","Older Children","Adults")) ,nrow=3)
+
+#make a line graph
+figX2<-ggplot(data=dtc1,aes(x=reward_exploit,
+                    y= explore,
+                    color=factor(agegroup,
+                      levels=c("5","11","Adult"))))+
+  geom_smooth(method="lm") +
+  labs(x="reward size of exploit option in trial",
+       y="proportion of explore initial choices") +
+  scale_color_discrete(name="Age Group")
+
+figX2
+
+```
+
+Stats: Did the exploit reward size effect differ by age group?
+```{r}
+glmer_explore.sizeXage<-glmer(explore~scale(reward_exploit)*agegroup+
+                                (1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial")
+
+#check out probs
+#coef(glmer_explore.sizeXage)
+
+#check if interaction is sig
+glmer_explore.size_age<-glmer(explore~reward_exploit+agegroup +(1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial")
+anova(glmer_explore.sizeXage,glmer_explore.size_age)
+```
+Yes, the AgeX reward size interaction is significant, chisq(2)=39.1, p<.001.
+
+Inspect Age X reward size interaction on explre choices:
+```{r}
+summary(glmer_explore.sizeXage)
+
+emtrends(glmer_explore.sizeXage,
+         ~agegroup,
+         var="reward_exploit") %>% 
+  pairs()
+
+```
+The reward size effect is significantly different across all 3 age groups, p's<.02.
+
+### Horizons
+Does the explore ~ reward_size effect differ by horizons?
+
+Plot
+```{r}
+#view by horizons
+ggplot(data=subset(dtc1,other==0),
+       aes(x=scale(reward_exploit),
+           y=explore,
+           color=factor(horizons_all,
+                        levels=c("0","1","4"),
+                        labels=c("Amb","Short","Long")),
+           group=horizons_all))+
+  geom_smooth(method="lm")+
+  ylim(0,1)+
+  labs(title="reward size effect by horizons",
+       y="proportion of exploit first choice",
+       x="exploit reward size (standardized)
+       (positive = current exploit reward is larger than average)")+
+  scale_color_discrete(name="horizons") 
+```
+
+Stats: Did the reward size effect differ across horizons?
+```{r}
+glmer_exploit.sizeXhorizons<-glmer(exploit~scale(reward_exploit)*as.factor(horizons_all) +
+                                (1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial",
+                          control=glmerControl(
+                                           optimizer="bobyqa",
+                                           optCtrl=list(maxfun=2e4)))
+
+#w/o interaction test
+glmer_exploit.size_horizons<-glmer(exploit~scale(reward_exploit)+as.factor(horizons_all) +
+                                (1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial",
+                          control=glmerControl(
+                                           optimizer="bobyqa",
+                                           optCtrl=list(maxfun=2e4)))
+
+anova(glmer_exploit.size_horizons,glmer_exploit.sizeXhorizons)
+```
+Horizons X reward interaction on exploit choices is marginal, chisq(2)=4.6261, p=0.09896
+
+Let's look at the contrasts among horizons anyways:
+```{r}
+emtrends(glmer_exploit.sizeXhorizons,
+         ~horizons_all,
+         var="reward_exploit") %>% pairs()
+
+summary(glmer_exploit.sizeXhorizons)
+
+```
+None of the tukey-adjusted pairwise comparisons of reward-size effects among horizons are significant. 
+
+Let's look at the model without interaction:
+```{r}
+summary(glmer_exploit.size_horizons)
+```
+The horizons effect remains significant controlling for reward-size.
+
+### Age X Horizons
+Is there a age X horizons X reward-size interaction on explore choices? I.e. does the exploit reward size effect differ among age groups and horizons?
+```{r}
+glmer_explore.sizeXhorizonsXage<-glmer(explore~
+                                         scale(reward_exploit)*#helps with fit
+                                         as.factor(horizons_all)*
+                                         agegroup +
+                                (1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial",
+                          control=glmerControl(
+                                           optimizer="bobyqa",
+                                           optCtrl=list(maxfun=2e4)))
+
+#compare to without 3 way interaction
+glmer_explore.sizeXhorizons_sizeXage<-glmer(explore~
+                                         scale(reward_exploit)*#helps with fit
+                                         as.factor(horizons_all)+
+                                         scale(reward_exploit)*agegroup +
+                                         as.factor(horizons_all)*agegroup +
+                                (1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial",
+                          control=glmerControl(
+                                           optimizer="bobyqa",
+                                           optCtrl=list(maxfun=2e4)))
+
+anova(glmer_explore.sizeXhorizons_sizeXage,glmer_explore.sizeXhorizonsXage)
+```
+The 3 way interaction among exploit-reward-size X horizons X age group is insignificant. The exploit reward size effect does not differ among age groups and horizons. 
+
+### Tracking reward size
+Are participants using a reward-size tracking and comparison strategy?
+
+Plot:
+```{r}
+figX3<-dtc %>% filter(choice_num==1) %>%
+  ggplot(aes(x=exploitMaxAvgDiff,
+             y=explore,
+             color=factor(agegroup,
+                               levels=c("5","11","Adult")))) +
+  geom_jitter(width=0,height=0.1) +
+  geom_smooth() +
+  scale_color_discrete(name="Age group") +
+  labs(x="Exploit average difference 
+       (current exploit reward size - rolling average largest reward size)",
+       y= "explore choice") +
+  ylim(0,1)
+figX3
+```
+
+Stats: does the rolling avg diff predict explore choices? 
+```{r}
+glmer_explore.rewardDiff<-glmer(explore~
+                                  scale(exploitMaxAvgDiff) + 
+                                  (1|id),
+                                data=subset(dtc1,other==0),
+                                family=binomial)
+
+summary(glmer_explore.rewardDiff)
+```
+The exploit avg difference predicts explore choices very strongly!
+
+Let's get the confidence intervals for the exploit difference effect:
+```{r}
+confint(glmer_explore.rewardDiff)
+
+```
+As the size difference between the current exploit reward size and the rolling average becomes more positive (i.e. the exploit size is more similar to or larger than the rolling average), the odds of exploring decreases. 
+
+#### Age
+Does the exploit avg difference effect differ by age group?
+```{r}
+glmer_explore.rewardDiffXage<-glmer(explore~
+                                  exploitMaxAvgDiff*agegroup +
+                                  (1|id),
+                                data=subset(dtc1,other==0),
+                                family=binomial,
+                                control=glmerControl(
+                                           optimizer="bobyqa",
+                                           optCtrl=list(maxfun=2e4)))
+#compare to null model
+glmer_explore.rewardDiff_age<-glmer(explore~scale(exploitMaxAvgDiff) +
+                       agegroup +
+                       (1|id),
+                     data=subset(dtc1,other==0),
+                     family=binomial
+                     )
+
+anova(glmer_explore.rewardDiff_age,glmer_explore.rewardDiffXage)
+
+```
+The ageXrewardDiff interaction is significant, 
+
+Summary of interaction model:
+```{r}
+summary(glmer_explore.rewardDiffXage)
+```
+
+Examine pairwise comparisons
+```{r}
+emtrends(glmer_explore.rewardDiffXage,
+         "agegroup",
+         var="exploitMaxAvgDiff") %>%
+  pairs()
+```
+The reward size tracking effect is different among all age groups. 
+
+#### Random effects
+Does the tracking reward size effect vary by individual?
+
+Plot: explore decision by exploit reward size
+```{r}
+dtc %>% filter(choice_num==1) %>%
+  ggplot(aes(x=exploitMaxAvgDiff,
+             y=explore,
+             color=factor(agegroup,
+                               levels=c("5","11","Adult")
+                          )
+             )
+         ) +
+  #geom_jitter(width=0,height=0.1) + 
+  geom_smooth() +
+  geom_smooth(aes(group=id),
+              method="glm",
+              se=F,
+              size=0.2) + 
+  scale_color_discrete(name="Age group") +
+  labs(x="Exploit average difference 
+       (current exploit reward size - rolling average largest reward size)",
+       y= "explore choice") +
+  ylim(0,1)
+```
+
+Stats:
+```{r}
+glmer_explore.rewardDiffRXage<-glmer(explore~
+                                  exploitMaxAvgDiff*agegroup +
+                                  (exploitMaxAvgDiff|id),
+                                data=subset(dtc1,other==0),
+                                family=binomial,
+                                control=glmerControl(
+                                           optimizer="bobyqa",
+                                           optCtrl=list(maxfun=2e4)))
+#compare to model w/ exploitMaxAvgDiff fixed
+anova(glmer_explore.rewardDiffRXage,glmer_explore.rewardDiffXage)
+
+#inspect random effect models
+summary(glmer_explore.rewardDiffRXage)
+```
+The random effect model fit better than the fixed effect model, chisq(2)=17.7, p= 0.00014. This suggests that the reward-size effect varies significantly across individuals. 
+
+Extract the reward size effect for each individual.
+```{r}
+dt_rewardSizeCoefs<-coef(glmer_explore.rewardDiffRXage)$id
+
+dt_rewardSizeCoefs$id<-rownames(dt_rewardSizeCoefs)
+dt_rewardSizeCoefs$rewardSizeCoef<-(-dt_rewardSizeCoefs$exploitMaxAvgDiff) #make negative, so that larger means greater effect
+
+dtsum <- merge(dtsum,
+               subset(dt_rewardSizeCoefs,
+                      select=c(id, rewardSizeCoef)),
+               by="id")
+#view a histogram of the reward size effect
+hist(dtsum$rewardSizeCoef)
+```
+Larger rewardSizeCoef = stronger effect of exploit reward size on decision. 
+
+### Trial7 only
+Trial7 provided the largest reward in the task, and that reward could only be accessed by picking the explore option. Did those who were able to access this largest reward differ across age groups? 
+
+Trial7 characteristics: short horizons, exploit reward size= 4.92205	
+```{r}
+#check out trial 7's specs
+dtc1 %>% filter(trialnum==7) %>%
+  group_by(agegroup) %>%
+  summarise(explore_count=sum(explore,na.rm=T),
+            total_count=n(),
+            perc_explored=explore_count/total_count * 100)
+
+#did selections differ by age group?
+dtc1 %>% filter(trialnum==7) %>%
+  ggplot(aes(x=factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger","Older","Adults")),
+             fill=choiceType)) +
+  geom_bar() +
+  labs(x="age group", title="count of trial7 choices")
+
+#trial 7 reward gain
+dtc1 %>% filter(trialnum==7) %>%
+  ggplot(aes(x=factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger","Older","Adults")),
+             y=reward_gain,
+             colour=choiceType)) +
+  geom_violin() + geom_jitter() + 
+  #geom_smooth(aes(x=agegroup_lin,y=reward_gain), method="lm")+
+  labs(x="age group", title="count of trial7 choices")
+
+```
+
+Stats: 
+```{r}
+lm_exploreTrial7.age<-lm(explore~agegroup11 + agegroupa,
+                  data=subset(dtc1,trialnum==7))
+summary(lm_exploreTrial7.age)
+
+#reward size gain
+lm_rewardTrial7.age<-lm(reward_gain~agegroup11 + agegroupa,
+                  data=subset(dtc1,trialnum==7))
+summary(lm_rewardTrial7.age)
+
+```
+More 5yos explored in trial7 and discovered the maximal reward. 
+
+## Adaptation to time horizons
+Did individuals explore more in long horizons than in short horizons?
+
+Plot: explore by long vs short horizons
+```{r}
+#graph of known horizons only
+fig5<-dtc1 %>% filter(h_amb==0 &  #no ambiguous horizons 
+                  other==0) %>%
+  group_by(id,horizons_all,agegroup) %>%
+  summarise(explore_mean=mean(explore,na.rm=T)*100) %>%
+  ggplot(aes(x=horizons_all,
+                                 y=explore_mean,
+                                 group=id,
+                                 colour=factor(agegroup,
+                                               levels=c("5","11","Adult"))))+
+  geom_line(lwd=0.05)+
+  stat_summary(fun=mean,geom="line",lwd=2,aes(group=1))+ #add mean line
+  geom_jitter(shape=1,height=0,width=0.1)+
+  #geom_point(shape=1)+
+  scale_x_discrete(limit=c(1,4),labels=c("Short Horizons","Long Horizons"))+
+  scale_fill_hue(c=20)+ #reduce saturation and increase luminance
+  ylab("% Initial Explore")+xlab("Horizons Condition")+
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+         axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.ticks.y=element_line(colour="black"),
+        strip.text.x= element_text(size=20,colour="black"))+#get rid of legend
+  facet_wrap(.~factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger Children (5-6yos, N=40)",
+                               "Older Children (11-12yos, N=40)",
+                               "Adults (18-31yos, N=48)")),
+             ncol=1)
+fig5         
+
+#save
+# jpeg("Horizons_fig5.jpg")
+# fig5
+# dev.off()
+
+#a scatterplot
+dtc1 %>% filter(h_amb==0 &  #no ambiguous horizons 
+                  other==0) %>%
+  group_by(id,horizons_all,agegroup) %>%
+  summarise(explore_mean=mean(explore,na.rm=T)*100) %>%
+  pivot_wider(names_from=horizons_all,
+              values_from=explore_mean,
+              names_prefix="horizons") %>%
+  ggplot(aes(x=horizons1,y=horizons4,color=factor(agegroup,
+                                               levels=c("5","11","Adult"))))+
+  geom_jitter(width=2,height=2) +
+  #geom_smooth(method="lm") +
+  geom_abline(intercept=0,slope=1)+
+  labs(x="%Explore in Short Horizons",
+       y="%Explore in Long Horizons",
+       subtitle="black line = line of identity",
+       color="Age Group") 
+```
+
+Plot: adaptation scores
+```{r}
+#plot w/ ggplot
+fig5<-ggplot(data=subset(dtsum,!is.na(agegroup)),
+                   aes(x=factor(agegroup,levels=c("5","11","Adult"),
+                               label=c("Younger\nChildren", 
+                                       "Older Children",
+                                       "Adults")),
+                      y=adaptation,
+                      colour=factor(agegroup,
+                                    levels=c("5","11","Adult"),
+                                    label=c("Younger Children",
+                                             "Older Children",
+                                             "Adults"))))+
+  geom_violin(size=1) +
+  geom_boxplot(width=0.1,size=.8)+
+  geom_jitter(shape=15,position=position_jitter(0.2),size=3)+
+  scale_fill_hue(c=20)+ #reduce saturation and increase luminance
+  ylab("Adaptative Exploration Scores\n(higher = more adaptive)")+ 
+  xlab("Age Group")+
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y=element_text(size=20,colour="black"),
+        strip.text.x= element_text(size=20,colour="black"))#+#get rid of legend
+fig5
+
+#save
+# jpeg("Horizons_Fig5.jpg",width=700)
+# fig5
+# dev.off()
+
+```
+
+Stats: Did individuals explore more in long horizons than in short horizons?
+```{r}
+glmer_horizons<-glmer(explore~h_long + (h_long|id),
+                      data=subset(dtc1,h_amb==0 & 
+                                    other==0),
+                      family=binomial)
+summary(glmer_horizons)
+```
+Explore initial choices differ significantly between long vs. short horizons. People explored more in long than in short horizons, p<.001.
+
+### Age
+Did adaptation to horizons differ across age groups?
+```{r}
+#use dummy coded agegroup and horizons
+m2<-glmer(explore~agegroup*h_long + 
+            (h_long|id),
+          data=subset(dtc1, h_amb == 0 &
+                        other==0),
+          control=glmerControl(
+            optimizer="bobyqa",
+            optCtrl=list(maxfun=2e4)),
+          family=binomial)
+
+#compare to w/o interaction
+m3<-glmer(explore~agegroupa+agegroup5+h_long+(h_long|id),
+          data=subset(dtc1, h_amb == 0 &
+                        other==0),
+          family=binomial)
+
+anova(m2,m3)
+```
+AgeXhorizons interaction on explore initial choices is significant.
+
+Examining interaction:
+```{r}
+summary(m2)
+
+emmeans(m2,
+        specs="h_long",
+        by="agegroup") %>%
+  pairs()
+```
+Adaptation was significant in 11yos and adults, but not in 5yos (z=-1.360, p=.1731)
+
+### Account for exploit reward size
+Accounting for the exploit reward size X age interaction, does the horizons X age interaction remain significant?
+```{r}
+glmer_explore.sizeXage_horizonsXage<-glmer(explore~reward_exploit*agegroup +
+                                         h_long*agegroup +
+                                (1|id),
+                          data=subset(dtc1,h_amb==0 & other==0),
+                          control=glmerControl(
+                                  optimizer="bobyqa",
+                                  optCtrl=list(maxfun=2e4)),
+                          family="binomial")
+#summary(glmer_explore.sizeXage_horizonsXage)
+
+#compare w/o horizonsXage
+glmer_explore.sizeXage_horizons<-glmer(explore~reward_exploit*agegroup + 
+                                         h_long +
+                                (1|id),
+                          data=subset(dtc1,h_amb==0 & other==0),
+                          family="binomial")
+
+anova(glmer_explore.sizeXage_horizonsXage,glmer_explore.sizeXage_horizons)
+```
+The horizons X age interaction is still significant after accounting for the age X reward-size interaction.
+
+Inspect model:
+```{r}
+summary(glmer_explore.sizeXage_horizonsXage)
+
+```
+
+### Reward gained
+Does more adaptation predict more rewards gained?
+
+Plot
+```{r}
+fig6<-ggplot(data=subset(dtsum,!is.na(agegroup)),
+                 aes(x=adaptation,y=reward_total,
+                     colour=factor(agegroup,levels=c("5","11","Adult"),
+                                   labels=c("Younger Children","Older Children","Adults"))),
+                 fill=factor(agegroup,levels=c("5","11","Adult"),
+                             labels=c("Younger Children","Older Children","Adults")))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  xlab("Adaptive Exploration")+
+  ylab("reward gain total")+
+  labs(color="Age Group") +
+  scale_fill_discrete(name="Age Group") +
+  theme(#legend.position="none",
+    legend.text=element_text(size=15),
+        legend.title=element_text(size=15),
+        axis.title.x=element_text(size=20,colour="black"),
+         axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black")
+  )
+fig6
+
+# jpeg("Horizons_Fig6.jpg",width=700)
+# fig6
+# dev.off()
+```
+
+## Choice patterns 
+View a table of choice pattern counts by age group:
+```{r}
+dtc1 %>% filter(h_long==1 ) %>%
+  group_by(agegroup) %>%
+  summarise(across(choice1_exploitOnly:choice6_misc,
+                   ~ sum(.x,na.rm=T)/n()*100),
+            total=n()
+            ) %>%
+  #.2flextable() %>% colformat_double(digits=1) #table
+  pivot_longer(cols=contains("choice"),
+               names_to="choicePattern",
+               values_to="percentage") %>% #graph
+  #arrange(desc(searchPattern)) %>%
+  ggplot(aes(x=factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger", "Older", "Adults")),
+             y=percentage,
+             group=agegroup,
+             fill=choicePattern)) +
+  geom_bar(stat="identity") + 
+  xlab("Age Group") + ylab("% of long horizons trials") +
+  labs(title="search patterns in long horizons across age groups")+
+  scale_fill_brewer(palette="Paired",
+                    breaks=c("choice6_misc",
+                             "choice5_sampleAll",
+                             "choice4_exploreFirstSampleRest",
+                             "choice3_exploreFirstMixed",
+                             "choice2_exploreFirstThenExploit",
+                             "choice1_exploitOnly"
+                             )) +
+  theme(#legend.position="none",
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=20),
+        axis.title.x=element_text(size=20,colour="black"),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black")
+  )
+
+#table of percentages
+dtc1 %>% filter(h_long==1 ) %>%
+  group_by(agegroup) %>%
+  summarise(total=n(),
+            exploreFirstSum=sum(explore), 
+            choice2Sum=sum(choice2_exploreFirstThenExploit),
+            prop_exploreFirst=exploreFirstSum/total, #calculate % explore 1st
+            prop_choice2GivenExploreFirst=sum(choice2_exploreFirstThenExploit)/
+              exploreFirstSum #calculate % choice2 | explore 1st
+  )
+```
+## Reward gain 
+
+### Adaptation
+Does more adaptation predict more regard gain?
+
+Plot:
+```{r}
+#view some graphs
+ggplot(data=subset(dtsum,!is.na(agegroup)),
+                 aes(x=adaptation,
+                     y=reward_total,
+                     colour=factor(agegroup,levels=c("5","11","Adult"),
+                                   labels=c("Younger Children","Older Children","Adults"))),
+                 fill=factor(agegroup,levels=c("5","11","Adult"),
+                             labels=c("Younger Children","Older Children","Adults")))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  xlab("Adaptive Exploration")+
+  ylab("reward gain total")+
+  labs(color="Age Group") +
+  scale_fill_discrete(name="Age Group") +
+  theme(#legend.position="none",
+    legend.text=element_text(size=15),
+        legend.title=element_text(size=15),
+        axis.title.x=element_text(size=20,colour="black"),
+         axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black")
+  )
+```
+
+Stats: 
+```{r}
+m_reward.adpt<-lm(reward_total~adaptation,data=dtsum)
+summary(m_reward.adpt)
+
+#reward gain by adaptation, controlling for age
+m_RewardAdaptAge<-lm(reward_total~adaptation+agegroup,data=dtsum)
+summary(m_RewardAdaptAge)
+
+#does this interaction with age?
+m_RewardAdaptXAge<-lm(reward_total~adaptation*agegroup11+adaptation*agegroupa,data=dtsum)
+summary(m_RewardAdaptXAge)
+
+#check for outliers
+# outlierTest(m_RewardAdaptXAge)
+# plot(m_RewardAdaptXAge) #no marked outliers really
+
+#is interaction sig?
+anova(m_RewardAdaptAge,m_RewardAdaptXAge)
+```
+More adaptation predicted more rewards gained, and adaptation interacted significantly with age group.
+
+### Reward size tracking
+Does more reward-size tracking predict more rewards gained?
+```{r}
+#view some graphs
+ggplot(data=subset(dtsum,!is.na(agegroup)),
+                 aes(x=rewardSizeCoef,
+                     y=reward_total,
+                     colour=factor(agegroup,levels=c("5","11","Adult"),
+                                   labels=c("Younger Children","Older Children","Adults"))),
+                 fill=factor(agegroup,levels=c("5","11","Adult"),
+                             labels=c("Younger Children","Older Children","Adults")))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  xlab("Reward size tracking effect")+
+  ylab("reward gain total")+
+  labs(color="Age Group") +
+  scale_fill_discrete(name="Age Group") +
+  theme(#legend.position="none",
+    legend.text=element_text(size=15),
+        legend.title=element_text(size=15),
+        axis.title.x=element_text(size=20,colour="black"),
+         axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black")
+  )
+```
+
+Stats: Does a stronger reward size effect predict more reward gain?
+```{r}
+m_reward.size<-lm(reward_total~rewardSizeCoef,
+                  data=dtsum)
+summary(m_reward.size)
+```
+Yes, a stronger reward size effect predicted more reward gain.
+
+Does this effect differ by age group?
+```{r}
+m_reward.sizeXage<-lm(reward_total~rewardSizeCoef*agegroup,
+                  data=dtsum)
+summary(m_reward.sizeXage)
+
+#control for age to compare
+m_reward.size_age<-lm(reward_total~rewardSizeCoef+agegroup,
+                  data=dtsum)
+anova(m_reward.size_age,m_reward.sizeXage)
+```
+No, the magnitude of this reward size effect on rewards gained did not differ significantly across age groups, p=.12. That means the strategy influenced reward sizes similarly across the three age groups.
+
+### Adaptation + Reward size
+Did both reward size and adaptation contribute uniquely to reward gain?
+```{r}
+m_reward.size_adpt<-lm(reward_total~rewardSizeCoef + 
+                         adaptation,
+                  data=dtsum)
+summary(m_reward.size_adpt)
+```
+Yes, both reward size tracking and adaptation to time horizons increased reward gain.
+
+Did this effect remain controlling for age group?
+```{r}
+m_reward.size_adpt_age<-lm(reward_total~rewardSizeCoef + 
+                         adaptation +
+                         agegroup,
+                  data=dtsum)
+summary(m_reward.size_adpt_age)
+```
+Yes, the effects remain controlling for age group.
+
+Does the reward size effect increase reward gain accounting for the adaptation X age interaction?
+```{r}
+m_reward.size_adptXage<-lm(reward_total~rewardSizeCoef + 
+                         adaptation*agegroup,
+                  data=dtsum)
+summary(m_reward.size_adptXage)
+```
+Yes, the reward size effect remains significant. 
+
+Overall, both adaptation and reward-size tracking predicted more reward gain. Reward size tracking increased reward gain in all age groups, and horizons adaptation increased reward gain in 5yos and adults, but not in 11yos (probably because in 11yos adaptation was quite high).
+
+## Ambiguous horizons
+Examining exploit choices under ambiguous horizons.
+
+### Age
+Do exploit choices differ across age groups in ambiguous horizons?
+
+Plot: exploit choices by age group in ambiguous horizons
+```{r}
+#graph with all horizons
+dtc1 %>% group_by(id,agegroup,horizons_all) %>%
+  summarise(exploit_mean=mean(exploit,na.rm=T)) %>%
+  ggplot(aes(x=factor(horizons_all,
+                      levels=c(1,4,0),
+                      labels=c("Short","Long","Ambiguous")),
+       y=exploit_mean,
+       group=as.factor(horizons_all),
+       colour=factor(agegroup,
+                     levels=c("5","11","Adult"))))+
+#  geom_line(lwd=0.1)+
+  geom_violin()+
+#  geom_boxplot(width=0.1)+
+  stat_summary(fun=mean,geom="crossbar",lwd=0.3,aes(group=1))+ #add mean line
+  geom_jitter(shape=1,width=.05)+
+#  scale_x_discrete(limit=c(1,4,0),labels=c("Short","Long","Ambiguous"))+
+  scale_fill_hue(c=20)+ #reduce saturation and increase luminance
+  ylab("% First Choice Exploit")+
+  xlab("Horizons")+
+  theme(legend.position="none")+#get rid of legend
+  facet_wrap(.~factor(agegroup,
+                      levels=c("5","11","Adult"),
+                      labels=c("Younger Children","Older Children","Adults")),
+             ncol=1)
+
+#only ambiguous horizons
+fig7<-dtc1 %>% filter(horizons_all==0) %>%
+  group_by(id,agegroup) %>%
+  summarise(exploit_mean=mean(exploit,na.rm=T)*100) %>%
+  ggplot(aes(x=factor(agegroup,
+                     levels=c("5","11","Adult"),
+                     labels=c("Younger Children",
+                              "Older Children",
+                              "Adults")),
+             y=exploit_mean,
+             colour=factor(agegroup,
+                     levels=c("5","11","Adult"),
+                     labels=c("Younger Children",
+                              "Older Children",
+                              "Adults")))) +
+    geom_violin(size=1) + geom_boxplot(width=0.1,size=.8)+
+  geom_jitter(shape=15,position=position_jitter(0.2),size=3)+ 
+  #geom_hline(yintercept=.5,linetype=2,color="grey20",size=1.5)+#add chance line
+  scale_fill_hue(c=20)+ #reduce saturation and increase luminance
+  ylab("% Exploit (vs Explore) in Ambiguous Horizons")+
+  xlab("Age Group")+
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y=element_text(size=20,colour="black"),
+        strip.text.x= element_text(size=20,colour="black"))
+
+fig7
+
+#save
+# jpeg("Horizons_Fig7.jpg",width=700)
+# fig7
+# dev.off()
+```
+
+Stats: Do exploit choices differ across age groups in ambiguous horizons?
+```{r}
+glmer_amb.age<-glmer(exploit~agegroup +(1|id), 
+                 data=subset(dtc1,h_amb==1 & other==0), 
+                 family=binomial,
+                 control=glmerControl(optimizer="bobyqa",
+                                      optCtrl=list(maxfun=2e4)))
+
+#without age
+glmer_amb<-glmer(exploit~1 +(1|id), 
+                 data=subset(dtc1,h_amb==1 & other==0), 
+                 family=binomial,
+                 control=glmerControl(optimizer="bobyqa",
+                                      optCtrl=list(maxfun=2e4)))
+
+#compare 
+anova(glmer_amb,glmer_amb.age)
+```
+Yes, exploit choices in ambiuguous horizons differ significantly across age groups, chisq(2)= 16.4, p<.001. 
+
+Inspect age effect:
+```{r}
+summary(glmer_amb.age)
+
+emmeans(glmer_amb.age,
+        specs="agegroup") %>%
+  pairs()
+```
+In ambiguous horizons, younger children exploited significantly less than older children, z=2.930, p (adjusted)= 0.01, and adults, z=-3.780  p(adjusted)=<.0001. Older children and adults did not differ from one another. 
+
+### Reward size
+Is age group difference in exploit choices driven by the exploit reward size effect?
+
+Plot: reward size effect in ambiguous horizons by age group
+```{r}
+ggplot(subset(dtc1,h_amb==1 & other==0), 
+       aes(x=scale(reward_exploit),
+           y=exploit,
+           group=factor(agegroup,
+                        levels=c("5","11","Adult")),
+           colour=factor(agegroup,
+                        levels=c("5","11","Adult"))))+
+  geom_smooth(method="lm") +
+  scale_color_discrete(name="Age Group") +
+  labs(title="exploit reward size effect in ambiguous horizons by age group",
+       subtitle="ambiguous horizons only",
+       x="exploit reward size in current trial (standardized)",
+       y="proportion of exploit initial choices")
+```
+
+Controlling for reward size, does age still affect exploit choices in ambiguous horizons?
+```{r}
+#model w/o interaction
+glmer_amb.age_reward<-glmer(exploit~
+                       reward_exploit + agegroup +
+                       (1|id), 
+                 data=subset(dtc1,h_amb==1 & other==0), 
+                 family=binomial)
+
+summary(glmer_amb.age_reward)
+```
+Yes, age remains significant controlling for the reward-size effect.
+
+Does the age effect on exploit choices interact w/ reward size?
+```{r}
+#model control for reward size
+glmer_amb.ageXreward<-glmer(exploit~
+                       reward_exploit*agegroup +
+                       (1|id), 
+                 data=subset(dtc1,h_amb==1 & other==0), 
+                 family=binomial)
+
+
+#compare 
+anova(glmer_amb.ageXreward,glmer_amb.age_reward)
+```
+Yes, the reward-size X age interaction on exploit choices under ambiguous horizons is significant, chisq(2)=12.7, p=.002.
+
+Inspect model summary:
+```{r}
+summary(glmer_amb.ageXreward)
+
+emtrends(glmer_amb.ageXreward,
+         ~agegroup,
+         var="reward_exploit") %>% 
+  pairs()
+
+```
+The reward size X age interaction is driven by the contrast between 11yos and 5yos: 11yos have a significantly stronger reward size effect under ambiguous horizons than 5yos did, p (adjusted) = 0.002. The reward size effects in 5yos and adults, and adults and 11yos, are not significantly different, p's (adjusted) > 0.17.
+
+## Stated preferences
+Table of stated novelty (vs. reward) preference by age groups
+```{r}
+#View tables
+dtsum %>% filter(!is.na(agegroup)) %>% #3 participants didn't complete task or didn't have data
+  group_by(agegroup, pref_novelty) %>%
+  summarise(count=n()) %>%
+  pivot_wider(names_from=pref_novelty,
+              values_from=count) %>%
+  dplyr::select(agegroup,
+                 reward_preference = `0`,
+                 novelty_preference = `1`,
+                 `NA`) %>%
+  flextable() %>%
+  set_caption("stated preference counts by age group")
+
+```
+
+### Age
+Did state preferences differ by age group?
+```{r}
+glm_pref.age<-glm(pref_novelty~agegroup11 + agegroupa,
+                  data=subset(dtsum,!is.na(pref_novelty &
+                                             !is.na(agegroup))),
+                  family="binomial")
+
+#null model
+glm_pref<-glm(pref_novelty~1,
+              data=subset(dtsum,!is.na(pref_novelty) &
+                            !is.na(agegroup)),
+              family="binomial")
+
+#test age effect
+anova(glm_pref,glm_pref.age,test="Chisq") 
+```
+The novelty over reward preference differs significantly across age groups.
+
+Examine age group effect:
+```{r}
+#optional change base term
+glm_pref.age<-glm(pref_novelty~agegroup5 + agegroupa,
+                  data=subset(dtsum,!is.na(pref_novelty &
+                                             !is.na(agegroup))),
+                  family="binomial")
+
+#
+summary(glm_pref.age)
+
+
+```
+Significantly more 11yos preferred novelty than adults did, p<.05.
+
+### Initial choices
+Did a stated preference for novelty predict overall more explore initial choices?
+
+Plot: overall explore choices by novelty vs. reward preferences
+```{r}
+ggplot(subset(dtsum,!is.na(pref_novelty)),
+       aes(x=factor(pref_novelty,
+                    levels=c(0,1),
+                    labels=c("rewards",
+                             "novelty")),
+                 y=explore_mean,
+                 color=agegroup)) +
+  geom_violin() +
+  geom_jitter(width=0.2) +
+  labs(x="stated preference",
+       y="proportion explore intial choices")
+```
+
+Stats:
+```{r}
+lm_expl.pref<-lm(explore_mean~pref_novelty,
+                 data=subset(dtsum, !is.na(explore_mean)))
+summary(lm_expl.pref)
+
+#maybe look just at the 11yos, cause that actually had some variance
+lm_expl.pref11<-lm(explore_mean~as.factor(posttestq_tst1),
+                 data=subset(dtsum, !is.na(explore_mean) & agegroup=="11"))
+summary(lm_expl.pref11)
+```
+No, state preferences did not predict overall exploration. 
+
+
+# Supplementary Results
+
+## Other choices as random exploration
+Table of Other initial choices across age groups 
+```{r}
+dtsum %>% group_by(agegroup) %>%
+  summarise(#mean_explore=mean(explore_mean,na.rm=T)*100,
+            #sd_explore=sd(explore_mean,na.rm=T)*100,
+            #mean_exploit=mean(exploit_mean,na.rm=T)*100,
+            #sd_exploit=sd(exploit_mean,na.rm=T)*100,
+            mean_other=mean(other_mean,na.rm=T)*100,
+            sd_other=sd(other_mean,na.rm=T)*100) %>%
+  flextable()
+```
+
+### Age
+Do % other initial choices differ across age groups?
+
+Stats
+```{r}
+#does % other differ across age groups?
+m_other.age<-glmer(other~agegroupa+agegroup11+
+                     (1|id),
+                   data=dtc1,
+                   family="binomial")
+summary(m_other.age)
+
+#compare with model without age
+m_other<-glmer(other~1+(1|id),data=dtc1,family="binomial")
+summary(m_other)
+anova(m_other,m_other.age)
+
+
+#because agegroup 11 made no other choices, glmer fails to converage
+#instead, use linearly coded age group
+dtc1$agegroup_lin<-ifelse(dtc1$agegroup5==1,-1,
+                          ifelse(dtc1$agegroup11==1,0,1))
+
+#does % other differ across age groups?
+m_other.ageLin<-glmer(other~agegroup_lin+
+                     (1|id),
+                   data=dtc1,
+                   family="binomial")
+summary(m_other.ageLin)
+
+#get CIs
+confint.merMod(m_other.ageLin,
+               method="boot")
+```
+
+### Horizons
+Do Other choices differ across horizons?
+
+Plot
+```{r}
+dtc1 %>% group_by(agegroup,id,horizons_all) %>%
+  summarise(other_sum=sum(other,na.rm=T)) %>%
+  ggplot(aes(x=factor(horizons_all,
+                      levels=c("0","1","4"),
+                      labels=c("Ambiguous",
+                               "Short",
+                               "Long")),
+             y=other_sum,
+             color=factor(agegroup,
+                          levels=c("5","11","Adult"))))+
+  geom_violin() + geom_jitter(size=0.2,height=0) +
+  scale_color_discrete(name="Age Group")+
+  labs(x="Horizons",
+       y="Total Other initial choices selected")
+```
+Stats: In younger children did Other choices differ across horizons?
+```{r}
+m_other.h<-glmer(other~h_short + h_long+(1|id),
+                 data=subset(dtc1,agegroup5==1),
+                 family=binomial)
+summary(m_other.h)
+
+#model w.o horizons
+m_other<-glmer(other~1+(1|id),
+               data=subset(dtc1,agegroup5==1),
+               family=binomial)
+summary(m_other)
+
+#compare
+anova(m_other.h,m_other)
+```
+
+## Learning across trials
+Do we see overall changes in choices across trials?
+```{r}
+# Choices across trials by age group
+dtc1 %>% group_by(trialnum,agegroup,choiceType) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x=trialnum,
+             y=count,
+             fill=choiceType))+
+  geom_bar(position="stack",stat="identity") +
+  facet_wrap(.~agegroup,nrow=3)
+
+#choices across trial by horizons
+dtc1 %>% group_by(trialnum,horizons_all,choiceType) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x=trialnum,
+             y=count,
+             fill=choiceType))+
+  geom_bar(position="stack",stat="identity") +
+  facet_wrap(.~factor(horizons_all,
+                      levels=c(0,1,4),
+                      labels=c("Amb",
+                               "Short",
+                               "Long")),
+             nrow=3)
+
+```
+Controlling for reward size, do 5yos exploit more later on in the task?
+```{r}
+glmer_exploit.trialnum<-glmer(exploit~trialnum + reward_exploit + (1|id),
+                              data=subset(dtc1,agegroup==5),
+                              family=binomial)
+summary(glmer_exploit.trialnum)
+```
+controlling for the reward size of the exploit option, younger children do not exploit more across the task. 
+
+## Sequential effects
+### Previous explore size
+were participants more likely to explore in the current trial if they explroed in the previous trial and if the hidden splash on the previous trial was the largest one?
+
+Plot of explore reward in previous trial and current likelihood of exploring in current trial:
+```{r}
+#plot by trials where the prev explore size was the largest
+#trials 7, 12, and 12 
+dtc1$prevChoice<-ifelse(dtc1$trialnum!=1,
+                        lag(dtc1$choiceType),NA)
+dtc1$maxChoicePrev<-ifelse(dtc1$trialnum!=1,
+                        lag(dtc1$max_choice),NA)
+
+dtc1 %>% 
+  # mutate(maxChoicePrev=lag(max_choice),
+  #        prevChoice=lag(choiceType)) %>% 
+  filter(prevChoice=="explore") %>%
+  # dplyr::select(id,maxChoicePrev,prevChoice,
+  #               choiceType) %>%
+  group_by(maxChoicePrev,prevChoice,choiceType) %>%
+  summarise(count=n()) %>%
+  ggplot(aes(x=maxChoicePrev,
+             y=count,
+             fill=factor(choiceType)
+             )
+         ) +
+  geom_bar(position="stack",stat="identity") +
+  scale_fill_discrete(name="current trial choice") +
+  labs(x = "previous trial's largest reward",
+       subtitle = "includes only trials where participants explored in the previous trial")
+
+# plot explore by prev explore reward size
+dtc1 %>%
+  filter(prevChoice=="explore") %>% #only trials where participants explored
+  group_by(prevExploreReward) %>%
+  summarise(perc_explore=mean(explore,na.rm=T)*100) %>%
+  ggplot(aes(x=prevExploreReward,
+             y=perc_explore))+
+    geom_jitter()+
+    geom_smooth(method="lm")+
+    labs(y="% explore in current trial",
+         x="explore reward size in previous trial")
+
+```
+This includes only trials where the previous trial was an explore choice
+
+Stats: were participants more likely to explore if the hidden splash on the previous trial was the largest one?
+```{r}
+glmer_explore.prev<-glmer(explore~ maxChoicePrev + (1|id),
+                                     data=subset(dtc1,prevChoice=="explore"),
+                                     family=binomial)
+
+summary(glmer_explore.prev)
+```
+When participants explored and uncovered the largest reward in a trial, they were not more likely to explore in the next trial. 
+
+Stats: were participants more likely to explore in the current trial as the previous trial's explore option became larger?
+```{r}
+glmer_explore.prevExplore<-glmer(explore ~ prevExploreReward + (1|id),
+      data=subset(dtc1,prevChoice=="explore"),
+                                     family=binomial)
+
+summary(glmer_explore.prevExplore)
+```
+
+## Horizons and AXCPT
+Correlation table of measures from horizons task and AXCPT
+```{r}
+#view correlation matrix
+dt_merge %>% filter(agegroup5==1) %>%
+  dplyr::select(explore_mean,
+               exploit_mean,
+               adaptation,
+               dcon) %>%
+  chart.Correlation() 
+  #cor(use="pairwise.complete.obs") %>% 
+  #apa.cor.table(show.conf.interval = F) #apa style table
+```
+
+### Dcontext and adaptation
+Plot
+```{r}
+#view only 5yos
+figSX<-ggplot(data=subset(dt_merge, agegroup==5),
+       aes(x=dcon,y=adaptation))+
+  geom_point(size=3) +
+   geom_smooth(method="lm",size=1.5)+
+  labs(title="Adaptive Exploration= % Explore in Long - Short Horizons",
+       x="D-Context (higher = more proactive)",
+       y="Adaptive Exploration") +
+   theme(legend.position="none",
+        title=element_text(size=15),
+        axis.title.x=element_text(size=20),
+        axis.title.y=element_text(size=20),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=10),
+        axis.text.y=element_text(size=10),
+        strip.text.x= element_text(size=20))
+figSX
+```
+
+Stats
+```{r}
+lm_adpt.dcon<-lm(adaptation~dcon,
+                 data=subset(dt_merge, agegroup==5))
+summary(lm_adpt.dcon)
+
+#cor
+cor.test(dt_merge$adaptation[dt_merge$agegroup==5],
+         dt_merge$dcon[dt_merge$agegroup==5])
+```
+
+## Horizons and IUS
+Does more exploit choices in ambiguous horizons predict intolerance of uncertainty (IUS)?
+
+Plot
+```{r}
+ggplot(dt_merge,aes(x=ius_total,
+                    y=exploit_mean_h0,
+                    color=agegroup))+
+  geom_point() +
+  geom_smooth(method="lm") +
+  stat_cor()
+
+```
+
+Stats:
+```{r}
+lm_amb.IUS<-lm(exploit_mean_h0~ius_total,
+               data=dt_merge)
+summary(lm_amb.IUS)
+
+#get 95 CI
+cor.test(dt_merge$exploit_mean_h0,
+         dt_merge$ius_total)
+```
+IUS does not predict exploit % in ambiguous horizons.
+
+Does this differ by age group?
+```{r}
+lm_amb.IUSXage<-lm(exploit_mean_h0~ius_total*agegroup,
+               data=dt_merge)
+summary(lm_amb.IUSXage)
+
+emtrends(lm_amb.IUSXage,
+         "agegroup",
+         var="ius_total")
+
+#separately for each age group
+lm_amb.IUS5<-lm(exploit_mean_h0~ius_total,
+               data=subset(dt_merge,agegroup==5))
+lm_amb.IUS11<-lm(exploit_mean_h0~ius_total,
+               data=subset(dt_merge,agegroup==11))
+lm_amb.IUSA<-lm(exploit_mean_h0~ius_total,
+               data=subset(dt_merge,agegroup=="Adult"))
+summary(lm_amb.IUS5)
+summary(lm_amb.IUS11)
+summary(lm_amb.IUSA)
+```
+No, the IUS effect is not significant in any age group. 
