@@ -17,3 +17,6 @@ Repository contents:
 6. *SearchCosts_Horizons_Summary_220915WZ.csv* = Simplified Horizons Task summarized data, individual-level
 
 7. *SearchCosts_TimeSearch_MergedData_20200427.csv* = Simplified Horizons Task merged raw data, trial-level
+
+TODO:
+* add data keys
