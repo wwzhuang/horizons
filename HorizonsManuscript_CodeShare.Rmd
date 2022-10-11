@@ -30,6 +30,7 @@ library(flextable)
 library(PerformanceAnalytics)
 library(apaTables)
 library(ggpubr)
+library(interactions)
 ```
 
 ## Global options
@@ -606,8 +607,9 @@ dt_merge %>%
          percOther=other_mean*100
          #scaleReward=scale(reward_total)
   ) %>%
-  filter(agegroup=="Adult") %>% #change to age group of interest
+  #filter(agegroup=="Adult") %>% #change to age group of interest
   dplyr::select(#id,
+              agegroup,
               age,
               percExplore,
               percExploit,
@@ -699,7 +701,19 @@ fig2<-dtc1 %>%
   facet_wrap(.~factor(agegroup,
                       levels=c("5","11","Adult"),
                       labels=c("Younger Children","Older Children","Adults")),
-             nrow=3)
+             nrow=3) +
+   theme(#legend.position="none",
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=20),
+        axis.title.x=element_text(size=20,colour="black"),
+        axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=20,colour="black"),
+        axis.text.y = element_text(size=20,colour="black"),
+        strip.text = element_text(size=20,colour="black")
+  )
 fig2
 
 #save
@@ -859,8 +873,13 @@ glmer_explore.horizons<-glmer(explore~as.factor(horizons_all) +
                               data=subset(dtc1,other==0),
                               family=binomial)
 
+glmer_explore<-glmer(explore~1 + 
+                                (1|id),
+                              data=subset(dtc1,other==0),
+                              family=binomial)
+
 #compare w/o horizons
-anova(glmer_explore,glmer_explore.horizons)
+anova(glmer_explore.horizons,glmer_explore)
 ```
 Horizons significantly predicted explore initial choices, p<.001.
 
@@ -919,38 +938,10 @@ dtc1 %>%
 Do choices differ among horizons and age group?
 ```{r}
 #do percentage exploit differ by age group and horizons?
-m_expt.ageXh<-glmer(exploit~agegroup*
-                      as.factor(horizons_all)+(1|id),
-                    data=subset(dtc1,other==0),
-                    control=glmerControl( #help w/ convergence
-                      optimizer="bobyqa",
-                      optCtrl=list(maxfun=2e4)),
-                    family="binomial")
-#summary(m_expt.ageXh) 
-
-#model without interaction
-m_expt.age_h<-glmer(exploit~agegroupa + h_short + agegroup11 + h_long+(1|id),
-                    data=subset(dtc1,other==0),
-                    family="binomial")
-#summary(m_expt.age.h)
-
-#test interaction
-anova(m_expt.ageXh,m_expt.age_h) 
-```
-A significant ageXhorizons interaction on exploit choices. 
-
-Inspect interaction
-```{r}
-#look at contrasts within each age group
-emmeans(m_expt.ageXh,
-        pairwise~horizons_all|agegroup)
-
-
-#optional: change the reference group
-m_expt.ageXh<-glmer(exploit~agegroup11*h_long +
-                      agegroup11*h_amb +
-                      agegroupa*h_long +
-                      agegroupa*h_amb +
+m_expt.ageXh<-glmer(explore~agegroup*
+                      factor(horizons_all,
+                                levels=c(4,1,0))+
+                      #scale(reward_exploit) +
                       (1|id),
                     data=subset(dtc1,other==0),
                     control=glmerControl( #help w/ convergence
@@ -959,10 +950,108 @@ m_expt.ageXh<-glmer(exploit~agegroup11*h_long +
                     family="binomial")
 summary(m_expt.ageXh) 
 
+#model without interaction
+m_expt.age_h<-glmer(explore~agegroupa + h_short + 
+                      agegroup11 + h_long + 
+                      #scale(reward_exploit) +
+                      (1|id),
+                    data=subset(dtc1,other==0),
+                    family="binomial")
+#summary(m_expt.age.h)
+
+#test interaction
+anova(m_expt.ageXh,m_expt.age_h) 
+#compare without age
+#anova(m_expt.age_h,glmer_explore.horizons)
+```
+A significant ageXhorizons interaction on exploit choices. 
+
+Inspect interaction
+```{r}
+#inspect means
+emmeans(m_expt.ageXh,
+        ~horizons_all|agegroup) %>% test()
+
+#look at horizons contrasts within each age group
+emmeans(m_expt.ageXh,
+        pairwise~factor(horizons_all,levels=c(4,1,0))|agegroup)
+
+#look at contrasts by horizons
+emmeans(m_expt.ageXh,
+        pairwise~agegroup|horizons_all)
+
+
+#optional: change the reference group
+m_expt.ageXh<-glmer(explore~agegroupa*h_long +
+                      agegroupa*h_amb +
+                      agegroup11*h_long +
+                      agegroup11*h_amb+ 
+                      #scale(reward_exploit)+
+                      (1|id),
+                    data=subset(dtc1,other==0),
+                    control=glmerControl( #help w/ convergence
+                      optimizer="bobyqa",
+                      optCtrl=list(maxfun=2e4)),
+                    family="binomial")
+confint(m_expt.ageXh, method="Wald") #%>% exp()
+summary(m_expt.ageXh) 
+
 
 ```
-In 11yos and 
+In long horizons, 5yos explored more than adults, but other age contrasts on exploration are not significant. 
 
+### Control for reward-size
+Control for reward-size in interaction
+```{r}
+m_expt.ageXh_reward<-glmer(exploit~agegroup*
+                      as.factor(horizons_all)+
+                      scale(reward_exploit) + (1|id),
+                    data=subset(dtc1,other==0),
+                    control=glmerControl( #help w/ convergence
+                      optimizer="bobyqa",
+                      optCtrl=list(maxfun=2e4)),
+                    family="binomial")
+summary(m_expt.ageXh_reward)
+
+#model without interaction
+m_expt.age_h_reward<-glmer(exploit~agegroup+
+                      as.factor(horizons_all)+
+                      scale(reward_exploit) + (1|id),
+                    data=subset(dtc1,other==0),
+                    control=glmerControl( #help w/ convergence
+                      optimizer="bobyqa",
+                      optCtrl=list(maxfun=2e4)),
+                    family="binomial")
+
+#compare models
+anova(m_expt.age_h_reward,m_expt.ageXh_reward)
+```
+Interaction remains significant controlling for reward size. 
+
+Control for reward-size X age interaction
+```{r}
+m_expt.ageXh_rewardXage<-glmer(exploit~agegroup*
+                      as.factor(horizons_all)+
+                      scale(reward_exploit)*agegroup + (1|id),
+                    data=subset(dtc1,other==0),
+                    control=glmerControl( #help w/ convergence
+                      optimizer="bobyqa",
+                      optCtrl=list(maxfun=2e4)),
+                    family="binomial")
+summary(m_expt.ageXh_rewardXage)
+
+#means
+emmeans(m_expt.ageXh_rewardXage,
+        ~horizons_all|agegroup) %>% test()
+
+#horizons effect by age group
+emmeans(m_expt.ageXh_rewardXage,
+        pairwise~horizons_all|agegroup)
+
+#age contrasts by horizons
+emmeans(m_expt.ageXh_rewardXage,
+        pairwise~agegroup|horizons_all)
+```
 ## Exploit reward size effect
 Did exploit reward sizes affect initial choices?
 
@@ -971,21 +1060,35 @@ Plot
 fig3<-ggplot(data=dtc1,aes(x=scale(reward_exploit),
                        fill=choiceType))+
   geom_bar(position="stack",stat="count",width=0.1) +
-  labs(x="standardized reward size of exploit option in trial")
+  labs(x="standardized reward size of exploit option in trial") +
+  theme(axis.title.x=element_text(size=20,colour="black"),
+         axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=10,colour="black"),
+        axis.text.y = element_text(size=10,colour="black"),
+        axis.ticks.y=element_line(colour="black"),
+        strip.text.x= element_text(size=20,colour="black"),
+        legend.title = element_text(size=20), #change legend title font size
+        legend.text = element_text(size=15))
 
 fig3
 
-# #save
-# jpeg("Horizons_fig3.jpg")
+# # #save
+# jpeg("Horizons_fig3.jpg",width=700)
 # fig3
 # dev.off()
 ```
 Stats:
 ```{r}
-glmer_explore.size<-glmer(explore~reward_exploit+(1|id),
+glmer_explore.size<-glmer(explore~scale(reward_exploit)+(1|id),
                           data=subset(dtc1,other==0),
                           family="binomial")
 summary(glmer_explore.size)
+confint(glmer_explore.size)
+#get stats
+anova(glmer_explore,glmer_explore.size)
 ```
 Yes, exploit reward size affected explore choices. 
 
@@ -1006,13 +1109,22 @@ ggplot(data=subset(dtc1,other==0),aes(x=reward_exploit,
 
 #make a line graph
 figX2<-ggplot(data=dtc1,aes(x=reward_exploit,
-                    y= explore,
+                    y= explore*100,
                     color=factor(agegroup,
                       levels=c("5","11","Adult"))))+
   geom_smooth(method="lm") +
   labs(x="reward size of exploit option in trial",
-       y="proportion of explore initial choices") +
-  scale_color_discrete(name="Age Group")
+       y="% explore initial choices") +
+  scale_color_discrete(name="Age Group") +
+   theme(axis.title.x=element_text(size=20,colour="black"),
+         axis.title.y=element_text(size=20,colour="black"),
+        panel.grid.minor=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background=element_blank(),
+        axis.text.x = element_text(size=10,colour="black"),
+        axis.text.y = element_text(size=10,colour="black"),
+        axis.ticks.y=element_line(colour="black"),
+        strip.text.x= element_text(size=20,colour="black"))
 
 figX2
 
@@ -1020,7 +1132,7 @@ figX2
 
 Stats: Did the exploit reward size effect differ by age group?
 ```{r}
-glmer_explore.sizeXage<-glmer(explore~scale(reward_exploit)*agegroup+
+glmer_explore.sizeXage<-glmer(explore~reward_exploit*agegroup+
                                 (1|id),
                           data=subset(dtc1,other==0),
                           family="binomial")
@@ -1029,10 +1141,14 @@ glmer_explore.sizeXage<-glmer(explore~scale(reward_exploit)*agegroup+
 #coef(glmer_explore.sizeXage)
 
 #check if interaction is sig
-glmer_explore.size_age<-glmer(explore~reward_exploit+agegroup +(1|id),
+glmer_explore.size_age<-glmer(explore~reward_exploit+
+                                agegroup +(1|id),
                           data=subset(dtc1,other==0),
                           family="binomial")
 anova(glmer_explore.sizeXage,glmer_explore.size_age)
+
+#compare w/o age
+anova(glmer_explore.size,glmer_explore.size_age)
 ```
 Yes, the AgeX reward size interaction is significant, chisq(2)=39.1, p<.001.
 
@@ -1043,7 +1159,18 @@ summary(glmer_explore.sizeXage)
 emtrends(glmer_explore.sizeXage,
          ~agegroup,
          var="reward_exploit") %>% 
+  #test()
   pairs()
+
+
+#change ref group
+glmer_explore.sizeXage<-glmer(explore~reward_exploit*agegroupa+
+                                reward_exploit*agegroup5+
+                                (1|id),
+                          data=subset(dtc1,other==0),
+                          family="binomial")
+confint(glmer_explore.sizeXage,
+        method="Wald")
 
 ```
 The reward size effect is significantly different across all 3 age groups, p's<.02.
@@ -1126,8 +1253,8 @@ glmer_explore.sizeXhorizonsXage<-glmer(explore~
 
 #compare to without 3 way interaction
 glmer_explore.sizeXhorizons_sizeXage<-glmer(explore~
-                                         scale(reward_exploit)*#helps with fit
-                                         as.factor(horizons_all)+
+                                         # scale(reward_exploit)*#helps with fit
+                                         # as.factor(horizons_all)+
                                          scale(reward_exploit)*agegroup +
                                          as.factor(horizons_all)*agegroup +
                                 (1|id),
@@ -1138,6 +1265,9 @@ glmer_explore.sizeXhorizons_sizeXage<-glmer(explore~
                                            optCtrl=list(maxfun=2e4)))
 
 anova(glmer_explore.sizeXhorizons_sizeXage,glmer_explore.sizeXhorizonsXage)
+
+#compare withou horizons
+anova(glmer_explore.sizeXhorizonsXage,glmer_explore.sizeXage)
 ```
 The 3 way interaction among exploit-reward-size X horizons X age group is insignificant. The exploit reward size effect does not differ among age groups and horizons. 
 
@@ -1441,8 +1571,9 @@ Explore initial choices differ significantly between long vs. short horizons. Pe
 Did adaptation to horizons differ across age groups?
 ```{r}
 #use dummy coded agegroup and horizons
-m2<-glmer(explore~agegroup*h_long + 
-            (h_long|id),
+glmer_explore_ageXhorizons<-glmer(explore~agegroupa*h_short + 
+            agegroup11*h_short +
+            (h_short|id),
           data=subset(dtc1, h_amb == 0 &
                         other==0),
           control=glmerControl(
@@ -1456,18 +1587,21 @@ m3<-glmer(explore~agegroupa+agegroup5+h_long+(h_long|id),
                         other==0),
           family=binomial)
 
-anova(m2,m3)
+anova(glmer_explore_ageXhorizons,m3)
+
 ```
 AgeXhorizons interaction on explore initial choices is significant.
 
 Examining interaction:
 ```{r}
-summary(m2)
+summary(glmer_explore_ageXhorizons)
 
-emmeans(m2,
-        specs="h_long",
-        by="agegroup") %>%
+emmeans(glmer_explore_ageXhorizons,
+        specs="agegroup",
+        by="h_long") %>%
   pairs()
+
+confint(glmer_explore_ageXhorizons,method="Wald")
 ```
 Adaptation was significant in 11yos and adults, but not in 5yos (z=-1.360, p=.1731)
 
@@ -1476,13 +1610,13 @@ Accounting for the exploit reward size X age interaction, does the horizons X ag
 ```{r}
 glmer_explore.sizeXage_horizonsXage<-glmer(explore~reward_exploit*agegroup +
                                          h_long*agegroup +
-                                (1|id),
+                                (h_long|id),
                           data=subset(dtc1,h_amb==0 & other==0),
                           control=glmerControl(
                                   optimizer="bobyqa",
                                   optCtrl=list(maxfun=2e4)),
                           family="binomial")
-#summary(glmer_explore.sizeXage_horizonsXage)
+summary(glmer_explore.sizeXage_horizonsXage)
 
 #compare w/o horizonsXage
 glmer_explore.sizeXage_horizons<-glmer(explore~reward_exploit*agegroup + 
@@ -1490,6 +1624,7 @@ glmer_explore.sizeXage_horizons<-glmer(explore~reward_exploit*agegroup +
                                 (1|id),
                           data=subset(dtc1,h_amb==0 & other==0),
                           family="binomial")
+
 
 anova(glmer_explore.sizeXage_horizonsXage,glmer_explore.sizeXage_horizons)
 ```
@@ -1499,7 +1634,35 @@ Inspect model:
 ```{r}
 summary(glmer_explore.sizeXage_horizonsXage)
 
+#age group contrasts in horizons effect
+emtrends(glmer_explore.sizeXage_horizonsXage,
+          ~agegroup,
+         var="h_long") %>% 
+  pairs()
+
+#horizons effects by age group
+emmeans(glmer_explore.sizeXage_horizonsXage,
+        pairwise~h_long|agegroup)
+
+#age comparisons by horizons
+emmeans(glmer_explore.sizeXage_horizonsXage,
+        pairwise~agegroup|h_long)
+
 ```
+
+### Adaptive Exploration Scores
+Do adaptive exploration scores increase by age group?
+```{r}
+lm_adpt.age<-lm(adaptation~agegroup11 + agegroup5,
+                data=dt_merge)
+summary(lm_adpt.age)
+
+#compare to without age
+lm_adpt<-lm(adaptation~1,
+            data=dt_merge)
+anova(lm_adpt,lm_adpt.age)
+```
+
 
 ### Reward gained
 Does more adaptation predict more rewards gained?
@@ -1634,7 +1797,9 @@ m_RewardAdaptAge<-lm(reward_total~adaptation+agegroup,data=dtsum)
 summary(m_RewardAdaptAge)
 
 #does this interaction with age?
-m_RewardAdaptXAge<-lm(reward_total~adaptation*agegroup11+adaptation*agegroupa,data=dtsum)
+m_RewardAdaptXAge<-lm(reward_total~adaptation*agegroupa+
+                        adaptation*agegroup5,
+                      data=dtsum)
 summary(m_RewardAdaptXAge)
 
 #check for outliers
@@ -1778,7 +1943,7 @@ fig7<-dtc1 %>% filter(horizons_all==0) %>%
                               "Adults")))) +
     geom_violin(size=1) + geom_boxplot(width=0.1,size=.8)+
   geom_jitter(shape=15,position=position_jitter(0.2),size=3)+ 
-  #geom_hline(yintercept=.5,linetype=2,color="grey20",size=1.5)+#add chance line
+  geom_hline(yintercept=50,linetype=2,color="grey20",size=1.5)+#add chance line
   scale_fill_hue(c=20)+ #reduce saturation and increase luminance
   ylab("% Exploit (vs Explore) in Ambiguous Horizons")+
   xlab("Age Group")+
@@ -1800,7 +1965,7 @@ fig7
 # dev.off()
 ```
 
-Stats: Do exploit choices differ across age groups in ambiguous horizons?
+Stats: Do choices differ across age groups in ambiguous horizons?
 ```{r}
 glmer_amb.age<-glmer(exploit~agegroup +(1|id), 
                  data=subset(dtc1,h_amb==1 & other==0), 
@@ -1830,8 +1995,8 @@ emmeans(glmer_amb.age,
 ```
 In ambiguous horizons, younger children exploited significantly less than older children, z=2.930, p (adjusted)= 0.01, and adults, z=-3.780  p(adjusted)=<.0001. Older children and adults did not differ from one another. 
 
-### Reward size
-Is age group difference in exploit choices driven by the exploit reward size effect?
+### Control for reward size
+Is age group difference in exploit choices driven by the exploit reward size X age effect?
 
 Plot: reward size effect in ambiguous horizons by age group
 ```{r}
@@ -1850,23 +2015,23 @@ ggplot(subset(dtc1,h_amb==1 & other==0),
        y="proportion of exploit initial choices")
 ```
 
-Controlling for reward size, does age still affect exploit choices in ambiguous horizons?
+Controlling for reward size X age, does age still affect exploit choices in ambiguous horizons?
 ```{r}
 #model w/o interaction
-glmer_amb.age_reward<-glmer(exploit~
-                       reward_exploit + agegroup +
+glmer_amb.ageXreward<-glmer(exploit~
+                       reward_exploit*agegroup + 
                        (1|id), 
                  data=subset(dtc1,h_amb==1 & other==0), 
                  family=binomial)
 
-summary(glmer_amb.age_reward)
+summary(glmer_amb.ageXreward)
 ```
 Yes, age remains significant controlling for the reward-size effect.
 
 Does the age effect on exploit choices interact w/ reward size?
 ```{r}
 #model control for reward size
-glmer_amb.ageXreward<-glmer(exploit~
+glmer_amb.ageXreward<-glmer(explore~
                        reward_exploit*agegroup +
                        (1|id), 
                  data=subset(dtc1,h_amb==1 & other==0), 
@@ -1874,7 +2039,7 @@ glmer_amb.ageXreward<-glmer(exploit~
 
 
 #compare 
-anova(glmer_amb.ageXreward,glmer_amb.age_reward)
+summary(glmer_amb.ageXreward)
 ```
 Yes, the reward-size X age interaction on exploit choices under ambiguous horizons is significant, chisq(2)=12.7, p=.002.
 
@@ -1886,6 +2051,14 @@ emtrends(glmer_amb.ageXreward,
          ~agegroup,
          var="reward_exploit") %>% 
   pairs()
+
+emmeans(glmer_amb.ageXreward,
+        pairwise~agegroup|reward_exploit,
+        weights="show.levels")
+
+interact_plot(glmer_amb.ageXreward, 
+              pred = reward_exploit, 
+              modx = agegroup)
 
 ```
 The reward size X age interaction is driven by the contrast between 11yos and 5yos: 11yos have a significantly stronger reward size effect under ambiguous horizons than 5yos did, p (adjusted) = 0.002. The reward size effects in 5yos and adults, and adults and 11yos, are not significantly different, p's (adjusted) > 0.17.
@@ -2184,7 +2357,7 @@ figSX<-ggplot(data=subset(dt_merge, agegroup==5),
        aes(x=dcon,y=adaptation))+
   geom_point(size=3) +
    geom_smooth(method="lm",size=1.5)+
-  labs(title="Adaptive Exploration= % Explore in Long - Short Horizons",
+  labs(#title="Adaptive Exploration= % Explore in Long - Short Horizons",
        x="D-Context (higher = more proactive)",
        y="Adaptive Exploration") +
    theme(legend.position="none",
