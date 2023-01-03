@@ -1702,7 +1702,7 @@ fig6
 ## Choice patterns 
 View a table of choice pattern counts by age group:
 ```{r}
-dtc1 %>% filter(h_long==1 ) %>%
+figs1<-dtc1 %>% filter(h_long==1 ) %>%
   group_by(agegroup) %>%
   summarise(across(choice1_exploitOnly:choice6_misc,
                    ~ sum(.x,na.rm=T)/n()*100),
@@ -1721,7 +1721,7 @@ dtc1 %>% filter(h_long==1 ) %>%
              fill=choicePattern)) +
   geom_bar(stat="identity") + 
   xlab("Age Group") + ylab("% of long horizons trials") +
-  labs(title="search patterns in long horizons across age groups")+
+  #labs(title="search patterns in long horizons across age groups")+
   scale_fill_brewer(palette="Paired",
                     breaks=c("choice6_misc",
                              "choice5_sampleAll",
@@ -1731,7 +1731,7 @@ dtc1 %>% filter(h_long==1 ) %>%
                              "choice1_exploitOnly"
                              )) +
   theme(#legend.position="none",
-        legend.text=element_text(size=20),
+        legend.text=element_text(size=15),
         legend.title=element_text(size=20),
         axis.title.x=element_text(size=20,colour="black"),
         axis.title.y=element_text(size=20,colour="black"),
@@ -1741,6 +1741,12 @@ dtc1 %>% filter(h_long==1 ) %>%
         axis.text.x = element_text(size=20,colour="black"),
         axis.text.y = element_text(size=20,colour="black")
   )
+
+figs1
+#save
+# jpeg("Horizons_FigS1.jpg",width=700)
+# figs1
+# dev.off()
 
 #table of percentages
 dtc1 %>% filter(h_long==1 ) %>%
@@ -1927,7 +1933,7 @@ dtc1 %>% group_by(id,agegroup,horizons_all) %>%
              ncol=1)
 
 #only ambiguous horizons
-fig7<-dtc1 %>% filter(horizons_all==0) %>%
+fig7<-dtc1 %>% filter(horizons_all==0 & other==0) %>%
   group_by(id,agegroup) %>%
   summarise(exploit_mean=mean(exploit,na.rm=T)*100) %>%
   ggplot(aes(x=factor(agegroup,
@@ -1941,8 +1947,9 @@ fig7<-dtc1 %>% filter(horizons_all==0) %>%
                      labels=c("Younger Children",
                               "Older Children",
                               "Adults")))) +
-    geom_violin(size=1) + geom_boxplot(width=0.1,size=.8)+
-  geom_jitter(shape=15,position=position_jitter(0.2),size=3)+ 
+    geom_violin(size=1) + 
+  geom_boxplot(width=0.1,size=.8)+
+  geom_jitter(shape=15,size=3, height=0.2, width=.2)+ 
   geom_hline(yintercept=50,linetype=2,color="grey20",size=1.5)+#add chance line
   scale_fill_hue(c=20)+ #reduce saturation and increase luminance
   ylab("% Exploit (vs Explore) in Ambiguous Horizons")+
